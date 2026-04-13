@@ -7,89 +7,162 @@
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
+  <a class="github-cta" href="https://github.com/amir-h-rassafi/ratelimit-simulator" target="_blank" rel="noreferrer" aria-label="Support us on GitHub with a star">
+    <svg aria-hidden="true" viewBox="0 0 16 16" width="18" height="18">
+      <path d="M8 0C3.58 0 0 3.67 0 8.2c0 3.62 2.29 6.69 5.47 7.78.4.08.55-.18.55-.4 0-.2-.01-.86-.01-1.56-2.01.38-2.53-.5-2.69-.96-.09-.24-.48-.96-.82-1.15-.28-.16-.68-.55-.01-.56.63-.01 1.08.59 1.23.84.72 1.24 1.87.89 2.33.68.07-.53.28-.89.51-1.1-1.78-.21-3.64-.91-3.64-4.05 0-.89.31-1.62.82-2.2-.08-.21-.36-1.04.08-2.17 0 0 .67-.22 2.2.84A7.42 7.42 0 0 1 8 3.99c.68 0 1.36.09 2 .27 1.53-1.06 2.2-.84 2.2-.84.44 1.13.16 1.96.08 2.17.51.58.82 1.31.82 2.2 0 3.15-1.87 3.84-3.65 4.05.29.26.54.75.54 1.51 0 1.1-.01 1.98-.01 2.25 0 .22.15.48.55.4A8.1 8.1 0 0 0 16 8.2C16 3.67 12.42 0 8 0Z" />
+    </svg>
+    <span>Support us on GitHub</span>
+    <strong>Star</strong>
+  </a>
   <main class="container">
-    <header class="hero">
-      <h1>Rate Limiter Simulator</h1>
-      <p>Simulate traffic, latency distributions, limiter windows, and outcomes (`served`, `delayed`, `429`).</p>
+    <header class="app-header">
+      <div class="hero">
+        <p class="eyebrow">Rate limit operations</p>
+        <h1>Rate Limiter Simulator</h1>
+        <p>Model burst traffic, limiter windows, queue pressure, decision latency, and 429 outcomes.</p>
+      </div>
     </header>
 
     <div class="layout">
       <aside class="sidebar">
+        <section class="run-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Scenario runner</p>
+              <h2>Apply configuration</h2>
+            </div>
+            <span class="status-pill">Ready</span>
+          </div>
+          <div class="run-copy">
+            <p>Refresh analytics, time series, and latency distribution from the current inputs.</p>
+            <ul class="run-checklist" aria-label="Simulation status">
+              <li id="checkInputs" data-state="ok">Inputs captured</li>
+              <li id="checkResults" data-state="ok">Results current</li>
+            </ul>
+          </div>
+          <button id="runBtn" class="run-button" type="button">
+            <span>Run Simulation</span>
+            <span aria-hidden="true">Enter</span>
+          </button>
+        </section>
+
         <section class="panel controls">
-          <h2>Traffic Controls</h2>
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Inputs</p>
+              <h2>Traffic</h2>
+            </div>
+            <span class="panel-badge">Poisson arrivals</span>
+          </div>
           <div class="grid">
-            <label>Duration (s)
+            <label><span>Duration</span>
               <input id="durationSec" type="number" min="5" step="1" value="60" />
+              <span class="field-unit">seconds</span>
             </label>
-            <label>Step (ms)
-              <input id="stepMs" type="number" min="10" step="10" value="100" />
+            <label><span>Step</span>
+              <input id="stepMs" type="number" min="1" step="1" value="100" />
+              <span class="field-unit">milliseconds</span>
             </label>
-            <label>Target RPS
+            <label><span>Target RPS</span>
               <input id="rps" type="number" min="0" step="1" value="80" />
+              <span class="field-unit">requests/sec</span>
             </label>
-            <label>Burst Factor (0-1)
+            <label><span>Burst factor</span>
               <input id="burstiness" type="number" min="0" max="1" step="0.05" value="0.25" />
+              <span class="field-unit">0 to 1</span>
             </label>
-            <label>Max Concurrent
+            <label><span>Max concurrent</span>
               <input id="maxConcurrent" type="number" min="1" step="1" value="40" />
+              <span class="field-unit">in flight</span>
             </label>
-            <label>Queue Capacity
+            <label><span>Queue capacity</span>
               <input id="queueCapacity" type="number" min="0" step="1" value="300" />
+              <span class="field-unit">requests</span>
             </label>
-            <label>Max Queue Wait (ms)
+            <label><span>Max queue wait</span>
               <input id="maxQueueWaitMs" type="number" min="0" step="10" value="1200" />
+              <span class="field-unit">milliseconds</span>
             </label>
           </div>
         </section>
 
         <section class="panel controls">
-          <h2>Rate Limiter</h2>
-          <div class="grid">
-            <label>Limiter Type
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Policy</p>
+              <h2>Rate Limiter</h2>
+            </div>
+            <span class="panel-badge">Cascade</span>
+          </div>
+          <div class="grid compact-grid">
+            <label><span>Window algorithm</span>
               <select id="limiterType">
-                <option value="fixed">Fixed Window</option>
-                <option value="sliding">Sliding Window</option>
+                <option value="fixed">Fixed window counter</option>
+                <option value="sliding">Sliding rolling window</option>
               </select>
+              <span class="field-unit">How requests are counted inside each window</span>
             </label>
           </div>
+          <p id="limiterAlgorithmNote" class="algorithm-note">Every cascaded row below uses fixed window counters: each counter resets at the window boundary.</p>
           <div class="window-stack">
             <div class="window-head">
-              <strong>Cascaded Windows</strong>
+              <strong>Cascaded windows</strong>
               <button id="addWindowBtn" type="button">Add Window</button>
             </div>
             <div id="windowRows"></div>
           </div>
-          <p class="hint">Each request must pass all windows in cascade. Example: 1s/60 + 10s/500 + 60s/2,000.</p>
+          <p class="hint">Each request must pass all windows in cascade. Window length is entered in seconds. Example: 1s/60 + 10s/500 + 60s/2,000.</p>
         </section>
 
         <section class="panel controls">
-          <h2>Service Latency</h2>
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Backend</p>
+              <h2>Service Latency</h2>
+            </div>
+            <span class="panel-badge">Distribution</span>
+          </div>
           <div class="grid">
-            <label>Distribution
+            <label><span>Distribution</span>
               <select id="latencyDist">
                 <option value="constant">Constant</option>
                 <option value="uniform">Uniform</option>
-                <option value="normal">Normal</option>
+                <option value="normal" selected>Normal / Gaussian</option>
                 <option value="lognormal">Log-normal</option>
                 <option value="exponential">Exponential</option>
               </select>
             </label>
-            <label>Param A
+            <label><span id="latALabel">Mean latency</span>
               <input id="latA" type="number" step="1" value="120" />
+              <span id="latAHelp" class="field-unit">milliseconds</span>
             </label>
-            <label>Param B
+            <label><span id="latBLabel">Std deviation</span>
               <input id="latB" type="number" step="1" value="60" />
+              <span id="latBHelp" class="field-unit">milliseconds</span>
             </label>
           </div>
           <p class="hint">
-            Params: constant=A(ms), uniform=[A,B], normal=mean(A)/std(B), log-normal=mu(A)/sigma(B), exponential=mean(A).
+            The labels change with the selected distribution.
           </p>
+          <div class="mini-chart">
+            <div>
+              <strong>Shape preview</strong>
+              <span id="latencyPreviewLabel">Normal / Gaussian</span>
+            </div>
+            <canvas id="latencyPreview" width="360" height="120"></canvas>
+          </div>
         </section>
 
         <section class="panel controls">
-          <h2>Rate-Limiter Latency</h2>
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Control plane</p>
+              <h2>Rate-Limiter Latency</h2>
+            </div>
+            <span class="panel-badge">Decision time</span>
+          </div>
           <div class="grid">
-            <label>Decision Dist
+            <label><span>Decision distribution</span>
               <select id="rlLatencyDist">
                 <option value="constant">Constant</option>
                 <option value="uniform">Uniform</option>
@@ -98,40 +171,67 @@
                 <option value="exponential">Exponential</option>
               </select>
             </label>
-            <label>Decision Param A
+            <label><span id="rlLatALabel">Decision latency</span>
               <input id="rlLatA" type="number" step="1" value="8" />
+              <span id="rlLatAHelp" class="field-unit">milliseconds</span>
             </label>
-            <label>Decision Param B
+            <label><span id="rlLatBLabel">Unused</span>
               <input id="rlLatB" type="number" step="1" value="4" />
+              <span id="rlLatBHelp" class="field-unit">ignored for constant/exponential</span>
             </label>
           </div>
           <p class="hint">
-            This is processing latency of the rate limiter itself. Higher values increase pending decisions and can amplify queueing/429 impact.
+            Processing latency of the rate limiter itself. Higher values increase pending decisions and can amplify queueing/429 impact.
           </p>
-        </section>
-
-        <section class="panel actions">
-          <button id="runBtn">Run Simulation</button>
+          <div class="mini-chart">
+            <div>
+              <strong>Shape preview</strong>
+              <span id="rlLatencyPreviewLabel">Constant</span>
+            </div>
+            <canvas id="rlLatencyPreview" width="360" height="120"></canvas>
+          </div>
         </section>
       </aside>
 
       <section class="content">
-        <section class="panel metrics">
-          <h2>Analytics</h2>
+        <section id="resultPanel" class="panel metrics">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Result</p>
+              <h2>Analytics</h2>
+            </div>
+            <span class="panel-badge">Current run</span>
+          </div>
           <div id="kpis" class="kpi-grid"></div>
         </section>
 
         <section class="panel chart">
-          <h2>Combined Time-Series</h2>
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Time series</p>
+              <h2>Capacity, Admissions, and Rejections</h2>
+            </div>
+            <span class="panel-badge">Shared scale</span>
+          </div>
           <div id="seriesToggles" class="toggles"></div>
-          <canvas id="mergedChart" width="1100" height="360"></canvas>
+          <div class="chart-frame">
+            <canvas id="mergedChart" width="1100" height="390"></canvas>
+            <div id="chartTooltip" class="chart-tooltip" hidden></div>
+          </div>
         </section>
 
         <section class="panel chart">
-          <h2>Latency Shape</h2>
-          <canvas id="latencyChart" width="1100" height="260"></canvas>
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Distribution</p>
+              <h2>Latency Shape</h2>
+            </div>
+            <span class="panel-badge">Histogram</span>
+          </div>
+          <div class="chart-frame">
+            <canvas id="latencyChart" width="1100" height="300"></canvas>
+          </div>
         </section>
-
       </section>
     </div>
   </main>
