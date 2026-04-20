@@ -495,17 +495,67 @@ function histogram(values, binCount) {
   return { bins, max: Math.max(1, ...bins.map((b) => b.count)) };
 }
 
+function drawLatencyAxis(ctx, w, h, pad, bins, maxCount) {
+  const innerW = w - 2 * pad;
+  const innerH = h - 2 * pad;
+  const maxY = niceChartMax(maxCount);
+
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.strokeStyle = "#edf0f2";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i += 1) {
+    const y = pad + (i * innerH) / 4;
+    ctx.beginPath();
+    ctx.moveTo(pad, y);
+    ctx.lineTo(w - pad, y);
+    ctx.stroke();
+
+    const value = maxY - (i * maxY) / 4;
+    ctx.fillStyle = "#5f6368";
+    ctx.font = "12px Inter, Segoe UI, sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText(String(Math.round(value)), pad - 10, y + 4);
+  }
+
+  ctx.strokeStyle = "#dadce0";
+  ctx.beginPath();
+  ctx.moveTo(pad, h - pad);
+  ctx.lineTo(w - pad, h - pad);
+  ctx.stroke();
+
+  ctx.fillStyle = "#5f6368";
+  ctx.font = "12px Inter, Segoe UI, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText("requests", pad, 18);
+  ctx.fillText("latency (ms)", w - pad - 78, h - 10);
+
+  if (!bins.length) return maxY;
+
+  const min = bins[0].from;
+  const max = bins[bins.length - 1].to;
+  ctx.textAlign = "center";
+  for (let i = 0; i <= 4; i += 1) {
+    const x = pad + (i * innerW) / 4;
+    const value = min + (i * (max - min)) / 4;
+    ctx.fillText(`${Math.round(value)} ms`, x, h - pad + 22);
+  }
+
+  return maxY;
+}
+
 function drawLatencyHistogram(samples) {
   const canvas = document.getElementById("latencyChart");
   const ctx = canvas.getContext("2d");
   const w = canvas.width;
   const h = canvas.height;
-  const pad = 48;
+  const pad = 56;
 
   ctx.clearRect(0, 0, w, h);
 
   const { bins, max } = histogram(samples, 32);
-  drawAxes(ctx, w, h, pad, max, "latency", "count");
+  const maxY = drawLatencyAxis(ctx, w, h, pad, bins, max);
 
   if (!bins.length) return;
 
@@ -519,7 +569,7 @@ function drawLatencyHistogram(samples) {
   ctx.fillStyle = fill;
   bins.forEach((b, i) => {
     const x = pad + i * barW + 2;
-    const bh = (b.count / max) * innerH;
+    const bh = (b.count / maxY) * innerH;
     const y = pad + innerH - bh;
     const bw = Math.max(1, barW - 4);
     if (ctx.roundRect) {
