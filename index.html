@@ -14,12 +14,17 @@
         <h1>Rate Limiter Simulator</h1>
         <p>Traffic arrives first, policy rules decide admission, then accepted requests compete for backend capacity.</p>
       </div>
-      <a class="github-cta" href="https://github.com/amir-h-rassafi/ratelimit-simulator" target="_blank" rel="noreferrer" aria-label="GitHub repository">
-        <svg aria-hidden="true" viewBox="0 0 16 16" width="18" height="18">
-          <path d="M8 0C3.58 0 0 3.67 0 8.2c0 3.62 2.29 6.69 5.47 7.78.4.08.55-.18.55-.4 0-.2-.01-.86-.01-1.56-2.01.38-2.53-.5-2.69-.96-.09-.24-.48-.96-.82-1.15-.28-.16-.68-.55-.01-.56.63-.01 1.08.59 1.23.84.72 1.24 1.87.89 2.33.68.07-.53.28-.89.51-1.1-1.78-.21-3.64-.91-3.64-4.05 0-.89.31-1.62.82-2.2-.08-.21-.36-1.04.08-2.17 0 0 .67-.22 2.2.84A7.42 7.42 0 0 1 8 3.99c.68 0 1.36.09 2 .27 1.53-1.06 2.2-.84 2.2-.84.44 1.13.16 1.96.08 2.17.51.58.82 1.31.82 2.2 0 3.15-1.87 3.84-3.65 4.05.29.26.54.75.54 1.51 0 1.1-.01 1.98-.01 2.25 0 .22.15.48.55.4A8.1 8.1 0 0 0 16 8.2C16 3.67 12.42 0 8 0Z" />
-        </svg>
-        <span>GitHub</span>
-      </a>
+      <div class="header-actions">
+        <button id="runBtn" class="run-button" type="button">
+          <span>Run Simulation</span>
+        </button>
+        <a class="github-cta" href="https://github.com/amir-h-rassafi/ratelimit-simulator" target="_blank" rel="noreferrer" aria-label="GitHub repository">
+          <svg aria-hidden="true" viewBox="0 0 16 16" width="18" height="18">
+            <path d="M8 0C3.58 0 0 3.67 0 8.2c0 3.62 2.29 6.69 5.47 7.78.4.08.55-.18.55-.4 0-.2-.01-.86-.01-1.56-2.01.38-2.53-.5-2.69-.96-.09-.24-.48-.96-.82-1.15-.28-.16-.68-.55-.01-.56.63-.01 1.08.59 1.23.84.72 1.24 1.87.89 2.33.68.07-.53.28-.89.51-1.1-1.78-.21-3.64-.91-3.64-4.05 0-.89.31-1.62.82-2.2-.08-.21-.36-1.04.08-2.17 0 0 .67-.22 2.2.84A7.42 7.42 0 0 1 8 3.99c.68 0 1.36.09 2 .27 1.53-1.06 2.2-.84 2.2-.84.44 1.13.16 1.96.08 2.17.51.58.82 1.31.82 2.2 0 3.15-1.87 3.84-3.65 4.05.29.26.54.75.54 1.51 0 1.1-.01 1.98-.01 2.25 0 .22.15.48.55.4A8.1 8.1 0 0 0 16 8.2C16 3.67 12.42 0 8 0Z" />
+          </svg>
+          <span>GitHub</span>
+        </a>
+      </div>
     </header>
 
     <section class="guide-strip" aria-label="Simulation flow">
@@ -43,19 +48,6 @@
 
     <div class="layout">
       <aside class="sidebar">
-        <section class="run-panel">
-          <div class="panel-heading">
-            <div>
-              <p class="eyebrow">Run</p>
-              <h2>Simulation</h2>
-              <p class="panel-copy">Apply current inputs and refresh the charts.</p>
-            </div>
-          </div>
-          <button id="runBtn" class="run-button" type="button">
-            <span>Run Simulation</span>
-          </button>
-        </section>
-
         <section class="panel controls">
           <div class="panel-heading">
             <div>
@@ -121,12 +113,12 @@
             <div class="window-head">
               <div>
                 <strong>Rate limit rules</strong>
-                <span>Every request must pass all rules, top to bottom.</span>
+                <span>Every request must pass all rules. Policy rejects are 429.</span>
               </div>
               <button id="addWindowBtn" type="button">Add rule</button>
             </div>
             <div id="windowRows"></div>
-            <p id="windowEmpty" class="window-empty" hidden>No rate-limit rules. Requests bypass policy limits; queue and service limits can still return 429s.</p>
+            <p id="windowEmpty" class="window-empty" hidden>No rate-limit rules. Requests bypass policy limits; queue and service limits can still return 503s.</p>
           </div>
         </section>
 
@@ -214,7 +206,7 @@
             <div>
               <p class="eyebrow">Time series</p>
               <h2>Capacity, Admissions, and Rejections</h2>
-              <p class="panel-copy">Arrivals are always shown as the input baseline.</p>
+              <p class="panel-copy">429 means rate limited. 503 means backend queue full or timed out.</p>
             </div>
           </div>
           <div id="seriesToggles" class="toggles"></div>

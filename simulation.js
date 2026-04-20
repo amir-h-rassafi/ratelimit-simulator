@@ -165,6 +165,8 @@ function runSimulation(cfg) {
   let totalServed = 0;
   let totalDelayedServed = 0;
   let total429 = 0;
+  let total503 = 0;
+  let totalDroppedFull = 0;
   let totalDroppedWait = 0;
   let sumLatency = 0;
   let sumQueueDelay = 0;
@@ -173,6 +175,7 @@ function runSimulation(cfg) {
   for (let step = 0; step <= steps; step += 1) {
     const now = step * stepMs;
     let step429 = 0;
+    let step503 = 0;
     let stepAccepted = 0;
 
     for (let i = inflight.length - 1; i >= 0; i -= 1) {
@@ -191,9 +194,9 @@ function runSimulation(cfg) {
     for (let i = queue.length - 1; i >= 0; i -= 1) {
       if (now - queue[i].arrivalMs >= maxQueueWaitMs) {
         queue.splice(i, 1);
-        total429 += 1;
+        total503 += 1;
         totalDroppedWait += 1;
-        step429 += 1;
+        step503 += 1;
       }
     }
 
@@ -253,8 +256,9 @@ function runSimulation(cfg) {
       } else if (queue.length < queueCapacity) {
         queue.push({ arrivalMs: now });
       } else {
-        total429 += 1;
-        step429 += 1;
+        total503 += 1;
+        totalDroppedFull += 1;
+        step503 += 1;
       }
     }
     peakLimiterPending = Math.max(peakLimiterPending, limiterPending.length);
@@ -272,7 +276,8 @@ function runSimulation(cfg) {
       limiterPending: limiterPending.length,
       arrivalsPerSec: Math.round((arrivals * 1000) / stepMs),
       acceptedPerSec: Math.round((stepAccepted * 1000) / stepMs),
-      r429PerSec: Math.round((step429 * 1000) / stepMs)
+      r429PerSec: Math.round((step429 * 1000) / stepMs),
+      r503PerSec: Math.round((step503 * 1000) / stepMs)
     });
   }
 
@@ -289,9 +294,12 @@ function runSimulation(cfg) {
       arrived: totalArrived,
       served: totalServed,
       delayedServed: totalDelayedServed,
+      droppedFull: totalDroppedFull,
       droppedWait: totalDroppedWait,
+      rate503: total503,
       rate429: total429,
       servedPct: totalArrived ? (100 * totalServed) / totalArrived : 0,
+      rate503Pct: totalArrived ? (100 * total503) / totalArrived : 0,
       rate429Pct: totalArrived ? (100 * total429) / totalArrived : 0
     },
     latency: {

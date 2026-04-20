@@ -16,8 +16,10 @@ function renderKpis(result) {
     { name: "Arrived", value: formatNum(totals.arrived), kind: "neutral" },
     { name: "Served", value: `${formatNum(totals.served)} (${totals.servedPct.toFixed(1)}%)`, kind: "served" },
     { name: "Delayed Served", value: formatNum(totals.delayedServed), kind: "queue" },
-    { name: "429 Total", value: `${formatNum(totals.rate429)} (${totals.rate429Pct.toFixed(1)}%)`, kind: "danger" },
-    { name: "Queue Timeout 429", value: formatNum(totals.droppedWait), kind: "danger" },
+    { name: "429 Rate Limited", value: `${formatNum(totals.rate429)} (${totals.rate429Pct.toFixed(1)}%)`, kind: "danger" },
+    { name: "503 Unavailable", value: `${formatNum(totals.rate503)} (${totals.rate503Pct.toFixed(1)}%)`, kind: "danger" },
+    { name: "Queue Timeout 503", value: formatNum(totals.droppedWait), kind: "danger" },
+    { name: "Queue Full 503", value: formatNum(totals.droppedFull), kind: "danger" },
     { name: "Limiter Rule", value: mostBlocked ? `${mostBlocked.label} (${formatNum(mostBlocked.blocked)})` : "No rules", kind: "queue" },
     { name: "Latency p95", value: formatMs(latency.p95), kind: "latency" },
     { name: "Avg Queue Delay", value: formatMs(latency.avgQueueDelay), kind: "queue" },
@@ -181,7 +183,7 @@ function applyStateToUi(saved) {
 
 const seriesVisibility = new Map();
 const REQUIRED_SERIES = new Set(["arrivals"]);
-const DEFAULT_VISIBLE_SERIES = new Set(["arrivals", "accepted", "r429", "queue", "active"]);
+const DEFAULT_VISIBLE_SERIES = new Set(["arrivals", "accepted", "r429", "r503", "queue", "active"]);
 const mergedChartState = {
   fullSeries: [],
   fullTimeline: [],
@@ -226,6 +228,7 @@ function buildMergedSeries(result) {
   const base = [
     { key: "accepted", label: "Accepted/s", color: "#188038", values: result.timeline.map((p) => p.acceptedPerSec), emphasis: true, fill: true },
     { key: "r429", label: "429/s", color: "#d93025", values: result.timeline.map((p) => p.r429PerSec), emphasis: true, fill: true },
+    { key: "r503", label: "503/s", color: "#a142f4", values: result.timeline.map((p) => p.r503PerSec), emphasis: true },
     { key: "queue", label: "Queue", color: "#b06000", values: result.timeline.map((p) => p.queued) },
     { key: "active", label: "Active", color: "#1a73e8", values: result.timeline.map((p) => p.active) },
     { key: "arrivals", label: "Arrivals/s", color: "#3c4043", values: result.timeline.map((p) => p.arrivalsPerSec), required: true, emphasis: true },
@@ -291,20 +294,29 @@ function renderMergedChartTooltip(evt) {
   mergedChartState.hoverIndex = idx;
   drawLineChart("mergedChart", mergedChartState.series, null, "count/rate/util%", idx);
 
-  tooltip.innerHTML = [
-    `<strong>${timelinePoint ? timelinePoint.tSec.toFixed(1) : idx}s</strong>`,
-    ...mergedChartState.series.map((s) => (
-      `<div><span>${s.label}</span><b>${formatChartValue(s.values[idx])}</b></div>`
-    ))
-  ].join("");
+  tooltip.innerHTML = `
+    <strong>${timelinePoint ? timelinePoint.tSec.toFixed(1) : idx}s</strong>
+    ${mergedChartState.series.map((s) => (
+      `<div class="tooltip-row">
+        <span><i style="background:${s.color}"></i>${s.label}</span>
+        <b>${formatChartValue(s.values[idx])}</b>
+      </div>`
+    )).join("")}
+  `;
   tooltip.hidden = false;
 
   const frame = tooltip.parentElement.getBoundingClientRect();
   const tooltipRect = tooltip.getBoundingClientRect();
-  const left = Math.min(evt.clientX - frame.left + 14, frame.width - tooltipRect.width - 8);
-  const top = Math.max(8, evt.clientY - frame.top - 18);
+  const preferLeft = evt.clientX - frame.left > frame.width * 0.68;
+  const left = preferLeft
+    ? evt.clientX - frame.left - tooltipRect.width - 14
+    : evt.clientX - frame.left + 14;
+  const top = Math.min(
+    Math.max(8, evt.clientY - frame.top - tooltipRect.height / 2),
+    frame.height - tooltipRect.height - 8
+  );
   tooltip.style.left = `${Math.max(8, left)}px`;
-  tooltip.style.top = `${top}px`;
+  tooltip.style.top = `${Math.max(8, top)}px`;
 }
 
 function hideMergedChartTooltip() {

@@ -1,6 +1,6 @@
 # Rate Limiter Simulator
 
-Browser simulator for traffic, sliding-window rate limits, queue pressure, backend latency, and `429` outcomes.
+Browser simulator for traffic, sliding-window rate limits, queue pressure, backend latency, `429`, and `503` outcomes.
 
 Demo: https://ratelimit-simulator.pages.dev/
 
@@ -10,11 +10,11 @@ Demo: https://ratelimit-simulator.pages.dev/
 flowchart LR
   A[Traffic arrivals] --> B[Rate limit rules]
   B -->|allowed| C[Backend capacity]
-  B -->|rejected| E[429]
+  B -->|rate limited| E[429]
   C -->|available| D[Served]
   C -->|full| Q[Queue]
   Q -->|slot opens| D
-  Q -->|timeout or full| E
+  Q -->|timeout or full| F[503]
 ```
 
 ## Run locally
