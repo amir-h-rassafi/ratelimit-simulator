@@ -90,7 +90,7 @@ function updateDistributionPreviews() {
 
 const COOKIE_NAME = "rl_sim_state";
 const COOKIE_TTL_SEC = 60 * 60 * 24 * 180;
-const UI_STATE_VERSION = 7;
+const UI_STATE_VERSION = 8;
 const CONTROL_IDS = [
   "durationSec",
   "stepMs",
@@ -295,28 +295,21 @@ function renderMergedChartTooltip(evt) {
   drawLineChart("mergedChart", mergedChartState.series, null, "count/rate/util%", idx);
 
   tooltip.innerHTML = `
-    <strong>${timelinePoint ? timelinePoint.tSec.toFixed(1) : idx}s</strong>
+    <span class="tooltip-time">${timelinePoint ? timelinePoint.tSec.toFixed(1) : idx}s</span>
     ${mergedChartState.series.map((s) => (
-      `<div class="tooltip-row">
-        <span><i style="background:${s.color}"></i>${s.label}</span>
-        <b>${formatChartValue(s.values[idx])}</b>
-      </div>`
+      `<span class="tooltip-chip" style="--chip-color:${s.color}">
+        ${s.label}: <b>${formatChartValue(s.values[idx])}</b>
+      </span>`
     )).join("")}
   `;
   tooltip.hidden = false;
 
   const frame = tooltip.parentElement.getBoundingClientRect();
   const tooltipRect = tooltip.getBoundingClientRect();
-  const preferLeft = evt.clientX - frame.left > frame.width * 0.68;
-  const left = preferLeft
-    ? evt.clientX - frame.left - tooltipRect.width - 14
-    : evt.clientX - frame.left + 14;
-  const top = Math.min(
-    Math.max(8, evt.clientY - frame.top - tooltipRect.height / 2),
-    frame.height - tooltipRect.height - 8
-  );
+  const left = evt.clientX - frame.left - tooltipRect.width / 2;
+  const top = 8;
   tooltip.style.left = `${Math.max(8, left)}px`;
-  tooltip.style.top = `${Math.max(8, top)}px`;
+  tooltip.style.top = `${top}px`;
 }
 
 function hideMergedChartTooltip() {

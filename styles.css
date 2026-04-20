@@ -563,56 +563,50 @@ canvas:focus {
 .chart-tooltip {
   position: absolute;
   z-index: 5;
-  min-width: 190px;
-  max-width: 240px;
-  padding: 9px;
+  max-width: calc(100% - 16px);
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
   color: var(--text);
   background: rgba(255, 255, 255, 0.96);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-2);
-  font-size: 0.78rem;
+  border-radius: 999px;
+  box-shadow: var(--shadow-1);
+  font-size: 0.72rem;
   backdrop-filter: blur(8px);
+  white-space: nowrap;
+  overflow: hidden;
   pointer-events: none;
 }
 
-.chart-tooltip strong {
-  display: block;
-  margin-bottom: 7px;
-  padding-bottom: 6px;
+.tooltip-time {
+  flex: 0 0 auto;
   color: var(--text-muted);
-  border-bottom: 1px solid var(--border);
-  font-size: 0.82rem;
   font-weight: 600;
 }
 
-.tooltip-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  min-height: 22px;
-}
-
-.tooltip-row span {
+.tooltip-chip {
+  flex: 0 1 auto;
   min-width: 0;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 4px;
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.tooltip-row i {
-  flex: 0 0 auto;
-  width: 8px;
-  height: 8px;
+.tooltip-chip::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  background: var(--chip-color);
   border-radius: 999px;
 }
 
-.tooltip-row b {
+.tooltip-chip b {
   color: var(--text);
   font-weight: 600;
 }

@@ -105,9 +105,9 @@ function drawLineChart(canvasId, series, maxYOverride, yLabel, hoverIndex = null
   if (hoverIndex !== null && n > 0) {
     const idx = clamp(hoverIndex, 0, n - 1);
     const x = toX(idx);
-    ctx.strokeStyle = "#9aa0a6";
+    ctx.strokeStyle = "#dadce0";
     ctx.lineWidth = 1;
-    ctx.setLineDash([3, 5]);
+    ctx.setLineDash([]);
     ctx.beginPath();
     ctx.moveTo(x, pad);
     ctx.lineTo(x, h - pad);
@@ -119,9 +119,9 @@ function drawLineChart(canvasId, series, maxYOverride, yLabel, hoverIndex = null
       const y = toY(value);
       ctx.fillStyle = "#ffffff";
       ctx.strokeStyle = s.color;
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.arc(x, y, 3.5, 0, 2 * Math.PI);
+      ctx.arc(x, y, 2.5, 0, 2 * Math.PI);
       ctx.fill();
       ctx.stroke();
     }
