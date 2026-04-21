@@ -3,7 +3,33 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Rate Limiter Simulator</title>
+  <title>Rate Limiter Simulator for HTTP 429, HTTP 503, Queueing, and Latency</title>
+  <meta name="description" content="Interactive rate limiter simulator for HTTP 429, HTTP 503, queueing, pending requests, latency distribution, and downstream bottlenecks in distributed systems." />
+  <meta name="robots" content="index,follow,max-image-preview:large" />
+  <meta name="keywords" content="rate limiter simulator, HTTP 429 simulator, HTTP 503 simulator, queueing simulator, distributed systems simulator, sliding window rate limiter, latency distribution, bottleneck visualizer" />
+  <link rel="canonical" href="https://ratelimiter-simulator.amir-rassafi.workers.dev/" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Rate Limiter Simulator for HTTP 429, HTTP 503, Queueing, and Latency" />
+  <meta property="og:description" content="Visualize distributed-system rate limiting, queue buildup, latency, and downstream bottlenecks with an interactive browser simulator." />
+  <meta property="og:url" content="https://ratelimiter-simulator.amir-rassafi.workers.dev/" />
+  <meta property="og:site_name" content="Rate Limiter Simulator" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Rate Limiter Simulator for HTTP 429, HTTP 503, Queueing, and Latency" />
+  <meta name="twitter:description" content="Interactive browser simulator for rate limiting, queue pressure, latency distribution, and bottleneck analysis." />
+  <script type="application/ld+json">{
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Rate Limiter Simulator",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Web",
+    "url": "https://ratelimiter-simulator.amir-rassafi.workers.dev/",
+    "description": "Interactive browser simulator for HTTP 429, HTTP 503, queueing pressure, latency distribution, and distributed-system rate limiting.",
+    "author": {
+      "@type": "Person",
+      "name": "Amir Rassafi",
+      "url": "https://amir-h-rassafi.github.io/"
+    }
+  }</script>
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
@@ -296,6 +322,20 @@
         </section>
       </section>
     </div>
+
+    <section class="panel seo-copy" aria-labelledby="seoTitle">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">About</p>
+          <h2 id="seoTitle">What this simulator shows</h2>
+          <p class="panel-copy">Compact reference text for rate limiting, queue pressure, and failure behavior.</p>
+        </div>
+      </div>
+      <div class="seo-copy-body">
+        <p>This rate limiter simulator models how incoming traffic moves through a fast rate-limiter decision path, app pending capacity, and a downstream dependency. It is designed to make HTTP 429 rate-limit rejects, HTTP 503 capacity failures, queue buildup, pending requests, latency distribution, and bottleneck behavior easier to understand in a distributed system.</p>
+        <p>The simulator supports fixed-window and sliding-window thinking for policy behavior, and it highlights how limiter rules protect backend capacity by reducing overload before app timeouts and downstream saturation create visible failures.</p>
+      </div>
+    </section>
 
     <footer class="page-footer">
       <a class="about-link" href="https://amir-h-rassafi.github.io/" target="_blank" rel="noreferrer">About me</a>
