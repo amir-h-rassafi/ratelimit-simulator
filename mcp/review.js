@@ -47,6 +47,8 @@ function defaultSimulationConfig() {
 function summarizeResult(result) {
   return {
     arrived: result.totals.arrived,
+    enteredApp: result.totals.enteredApp,
+    enteredDependency: result.totals.enteredDependency,
     served: result.totals.served,
     rate429: result.totals.rate429,
     rate503: result.totals.rate503,
@@ -60,7 +62,9 @@ function summarizeResult(result) {
     peakLimiterPending: result.queues.peakLimiterPending,
     peakAppQueue: result.queues.peakAppQueue,
     peakDepQueue: result.queues.peakDepQueue,
-    protectionPct: round(result.protection.protectionPct)
+    protectionPct: round(result.protection.protectionPct),
+    appLoadAvoided: result.protection.appLoadAvoided,
+    dependencyLoadAvoided: result.protection.dependencyLoadAvoided
   };
 }
 
@@ -95,6 +99,61 @@ function reviewRateLimitConfig(config) {
   return warnings;
 }
 
+function makeStageAccumulator(defaults, fallbackDistKey) {
+  return {
+    components: [],
+    latencyMs: 0,
+    jitterVar: 0,
+    hasLatency: false,
+    hasJitter: false,
+    latencyDist: defaults[fallbackDistKey],
+    hasDist: false,
+    maxConcurrent: [],
+    queueCapacity: [],
+    timeoutMs: []
+  };
+}
+
+function ingestStageComponent(stage, component, warnings, groupLabel) {
+  stage.components.push(component.name || component.kind);
+  if (component.latencyMs != null) {
+    stage.latencyMs += component.latencyMs;
+    stage.hasLatency = true;
+  }
+  if (component.jitterMs != null) {
+    stage.jitterVar += component.jitterMs * component.jitterMs;
+    stage.hasJitter = true;
+  }
+  if (component.latencyDist) {
+    if (stage.hasDist && stage.latencyDist !== component.latencyDist) {
+      warnings.push(
+        `Multiple ${groupLabel} latency distributions were provided (${stage.latencyDist}, ${component.latencyDist}). Using ${stage.latencyDist} for the collapsed stage.`
+      );
+    } else {
+      stage.latencyDist = component.latencyDist;
+      stage.hasDist = true;
+    }
+  }
+  if (component.maxConcurrent != null) stage.maxConcurrent.push(component.maxConcurrent);
+  if (component.queueCapacity != null) stage.queueCapacity.push(component.queueCapacity);
+  if (component.timeoutMs != null) stage.timeoutMs.push(component.timeoutMs);
+}
+
+function applyStageAccumulator(config, stage, keys, warnings, groupLabel) {
+  if (!stage.components.length) return;
+  if (stage.hasLatency) config[keys.latency] = stage.latencyMs;
+  if (stage.hasJitter) config[keys.jitter] = round(Math.sqrt(stage.jitterVar));
+  config[keys.dist] = stage.latencyDist;
+  if (stage.maxConcurrent.length) config[keys.maxConcurrent] = Math.min(...stage.maxConcurrent);
+  if (stage.queueCapacity.length) config[keys.queueCapacity] = Math.min(...stage.queueCapacity);
+  if (stage.timeoutMs.length) config[keys.timeout] = Math.min(...stage.timeoutMs);
+  if (stage.components.length > 1) {
+    warnings.push(
+      `Multiple ${groupLabel} components were collapsed into one simulator stage. Latency was summed, jitter combined, and concurrency/queue/timeout were reduced to the tightest bound.`
+    );
+  }
+}
+
 function normalizeComponentPath(input = {}) {
   const warnings = [];
   const assumptions = [];
@@ -110,6 +169,8 @@ function normalizeComponentPath(input = {}) {
   let controlLatencyVar = 0;
   let appSeen = false;
   let depSeen = false;
+  const appStage = makeStageAccumulator(config, "latencyDist");
+  const depStage = makeStageAccumulator(config, "depLatencyDist");
 
   for (const component of components) {
     const kind = String(component.kind || "").toLowerCase();
@@ -136,34 +197,82 @@ function normalizeComponentPath(input = {}) {
 
     if (profile.group === "app") {
       appSeen = true;
-      if (component.maxConcurrent != null) config.maxConcurrent = component.maxConcurrent;
-      if (component.queueCapacity != null) config.queueCapacity = component.queueCapacity;
-      if (component.timeoutMs != null) config.maxQueueWaitMs = component.timeoutMs;
-      if (component.latencyDist) config.latencyDist = component.latencyDist;
-      if (component.latencyMs != null) config.latA = component.latencyMs;
-      if (component.jitterMs != null) config.latB = component.jitterMs;
+      ingestStageComponent(appStage, component, warnings, "app-stage");
       continue;
     }
 
     if (profile.group === "dependency") {
       depSeen = true;
-      if (component.maxConcurrent != null) config.depMaxConcurrent = component.maxConcurrent;
-      if (component.queueCapacity != null) config.depQueueCapacity = component.queueCapacity;
-      if (component.timeoutMs != null) config.depMaxQueueWaitMs = component.timeoutMs;
-      if (component.latencyDist) config.depLatencyDist = component.latencyDist;
-      if (component.latencyMs != null) config.depLatA = component.latencyMs;
-      if (component.jitterMs != null) config.depLatB = component.jitterMs;
+      ingestStageComponent(depStage, component, warnings, "dependency-stage");
     }
   }
 
   config.rlLatA = Math.max(1, controlLatency || config.rlLatA);
   config.rlLatB = Math.max(0, Math.sqrt(controlLatencyVar) || config.rlLatB);
+  applyStageAccumulator(
+    config,
+    appStage,
+    {
+      latency: "latA",
+      jitter: "latB",
+      dist: "latencyDist",
+      maxConcurrent: "maxConcurrent",
+      queueCapacity: "queueCapacity",
+      timeout: "maxQueueWaitMs"
+    },
+    warnings,
+    "app-stage"
+  );
+  applyStageAccumulator(
+    config,
+    depStage,
+    {
+      latency: "depLatA",
+      jitter: "depLatB",
+      dist: "depLatencyDist",
+      maxConcurrent: "depMaxConcurrent",
+      queueCapacity: "depQueueCapacity",
+      timeout: "depMaxQueueWaitMs"
+    },
+    warnings,
+    "dependency-stage"
+  );
   if (windows.length) config.windows = windows;
   if (!appSeen) warnings.push("No explicit app component provided. Default app capacity assumptions were used.");
   if (!depSeen) warnings.push("No explicit dependency component provided. Default downstream assumptions were used.");
   warnings.push(...reviewRateLimitConfig(config));
 
-  return { config, assumptions, warnings };
+  return {
+    config,
+    assumptions,
+    warnings,
+    collapse: {
+      control: {
+        componentCount: assumptions.filter((item) => COMPONENT_PROFILES[item.kind].group === "control").length,
+        latencyMs: round(config.rlLatA),
+        jitterMs: round(config.rlLatB),
+        windows: config.windows
+      },
+      app: {
+        components: appStage.components,
+        latencyMs: round(config.latA),
+        jitterMs: round(config.latB),
+        latencyDist: config.latencyDist,
+        maxConcurrent: config.maxConcurrent,
+        queueCapacity: config.queueCapacity,
+        timeoutMs: config.maxQueueWaitMs
+      },
+      dependency: {
+        components: depStage.components,
+        latencyMs: round(config.depLatA),
+        jitterMs: round(config.depLatB),
+        latencyDist: config.depLatencyDist,
+        maxConcurrent: config.depMaxConcurrent,
+        queueCapacity: config.depQueueCapacity,
+        timeoutMs: config.depMaxQueueWaitMs
+      }
+    }
+  };
 }
 
 function simulateScenario(input = {}) {
@@ -187,10 +296,14 @@ function compareScenarios(input = {}) {
       served: candidate.summary.served - base.summary.served,
       rate429: candidate.summary.rate429 - base.summary.rate429,
       rate503: candidate.summary.rate503 - base.summary.rate503,
+      enteredApp: candidate.summary.enteredApp - base.summary.enteredApp,
+      enteredDependency: candidate.summary.enteredDependency - base.summary.enteredDependency,
       p95: round(candidate.summary.p95 - base.summary.p95),
       peakAppQueue: candidate.summary.peakAppQueue - base.summary.peakAppQueue,
       peakDepQueue: candidate.summary.peakDepQueue - base.summary.peakDepQueue,
-      protectionPct: round(candidate.summary.protectionPct - base.summary.protectionPct)
+      protectionPct: round(candidate.summary.protectionPct - base.summary.protectionPct),
+      appLoadAvoided: candidate.summary.appLoadAvoided - base.summary.appLoadAvoided,
+      dependencyLoadAvoided: candidate.summary.dependencyLoadAvoided - base.summary.dependencyLoadAvoided
     },
     warnings: [...new Set([...base.warnings, ...candidate.warnings])]
   };
@@ -201,6 +314,7 @@ function reviewComponentPath(input = {}) {
   const result = runSimulation(normalized.config);
   return {
     normalizedConfig: normalized.config,
+    collapse: normalized.collapse,
     assumptions: normalized.assumptions,
     warnings: normalized.warnings,
     summary: summarizeResult(result),

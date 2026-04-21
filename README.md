@@ -2,7 +2,7 @@
 
 Browser simulator for traffic, sliding-window rate limits, queue pressure, backend latency, `429`, and `503` outcomes.
 
-Demo: https://ratelimit-simulator.pages.dev/
+Demo: https://ratelimiter-simulator.amir-rassafi.workers.dev/
 
 ## Design
 

@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://ratelimiter-simulator.amir-rassafi.workers.dev/sitemap.xml

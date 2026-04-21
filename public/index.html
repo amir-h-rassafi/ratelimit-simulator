@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rate Limiter Simulator for HTTP 429, HTTP 503, Queueing, and Latency</title>
+  <meta name="description" content="Interactive rate limiter simulator for HTTP 429, HTTP 503, queueing, pending requests, latency distribution, and downstream bottlenecks in distributed systems." />
+  <meta name="robots" content="index,follow,max-image-preview:large" />
+  <meta name="keywords" content="rate limiter simulator, HTTP 429 simulator, HTTP 503 simulator, queueing simulator, distributed systems simulator, sliding window rate limiter, latency distribution, bottleneck visualizer" />
+  <link rel="canonical" href="https://ratelimiter-simulator.amir-rassafi.workers.dev/" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Rate Limiter Simulator for HTTP 429, HTTP 503, Queueing, and Latency" />
+  <meta property="og:description" content="Visualize distributed-system rate limiting, queue buildup, latency, and downstream bottlenecks with an interactive browser simulator." />
+  <meta property="og:url" content="https://ratelimiter-simulator.amir-rassafi.workers.dev/" />
+  <meta property="og:site_name" content="Rate Limiter Simulator" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Rate Limiter Simulator for HTTP 429, HTTP 503, Queueing, and Latency" />
+  <meta name="twitter:description" content="Interactive browser simulator for rate limiting, queue pressure, latency distribution, and bottleneck analysis." />
+  <script type="application/ld+json">{
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Rate Limiter Simulator",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Web",
+    "url": "https://ratelimiter-simulator.amir-rassafi.workers.dev/",
+    "description": "Interactive browser simulator for HTTP 429, HTTP 503, queueing pressure, latency distribution, and distributed-system rate limiting.",
+    "author": {
+      "@type": "Person",
+      "name": "Amir Rassafi",
+      "url": "https://amir-h-rassafi.github.io/"
+    }
+  }</script>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="container">
+    <header class="app-header">
+      <div class="hero">
+        <p class="eyebrow">Simulator</p>
+        <h1>Rate Limiter Simulator</h1>
+        <p>Traffic flows through a fast limiter, modeled app pending requests, and a downstream dependency. The simulator shows where pressure accumulates, which timeout contract fails, and how much the limiter protects the system.</p>
+      </div>
+      <div class="header-actions">
+        <button id="runBtn" class="run-button" type="button">
+          <span>Run Simulation</span>
+        </button>
+        <a class="github-cta" href="https://github.com/amir-h-rassafi/ratelimit-simulator" target="_blank" rel="noreferrer" aria-label="GitHub repository">
+          <svg aria-hidden="true" viewBox="0 0 16 16" width="18" height="18">
+            <path d="M8 0C3.58 0 0 3.67 0 8.2c0 3.62 2.29 6.69 5.47 7.78.4.08.55-.18.55-.4 0-.2-.01-.86-.01-1.56-2.01.38-2.53-.5-2.69-.96-.09-.24-.48-.96-.82-1.15-.28-.16-.68-.55-.01-.56.63-.01 1.08.59 1.23.84.72 1.24 1.87.89 2.33.68.07-.53.28-.89.51-1.1-1.78-.21-3.64-.91-3.64-4.05 0-.89.31-1.62.82-2.2-.08-.21-.36-1.04.08-2.17 0 0 .67-.22 2.2.84A7.42 7.42 0 0 1 8 3.99c.68 0 1.36.09 2 .27 1.53-1.06 2.2-.84 2.2-.84.44 1.13.16 1.96.08 2.17.51.58.82 1.31.82 2.2 0 3.15-1.87 3.84-3.65 4.05.29.26.54.75.54 1.51 0 1.1-.01 1.98-.01 2.25 0 .22.15.48.55.4A8.1 8.1 0 0 0 16 8.2C16 3.67 12.42 0 8 0Z" />
+          </svg>
+          <span>GitHub</span>
+        </a>
+      </div>
+    </header>
+
+    <section class="guide-strip" aria-label="Simulation flow">
+      <div>
+        <strong>1. Traffic</strong>
+        <span>Generate arrivals with RPS and burst shape.</span>
+      </div>
+      <div>
+        <strong>2. Limiter queue</strong>
+        <span>Every arrival waits for a fast allow or reject decision.</span>
+      </div>
+      <div>
+        <strong>3. Policy</strong>
+        <span>Rules produce 429 and keep later queues under control.</span>
+      </div>
+      <div>
+        <strong>4. App pending</strong>
+        <span>When app capacity is full, requests remain pending until capacity opens or timeout expires.</span>
+      </div>
+      <div>
+        <strong>5. Dependency pending</strong>
+        <span>Downstream saturation creates its own pending state, deadline, and 503.</span>
+      </div>
+    </section>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <section id="trafficPanel" class="panel controls">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Inputs</p>
+              <h2>Traffic</h2>
+              <p class="panel-copy">Target RPS sets the baseline offered traffic. Burst factor adds a smooth wave around that baseline. A burst factor of 0 means the expected traffic shape is flat.</p>
+            </div>
+          </div>
+          <div class="grid">
+            <label><span>Duration</span>
+              <input id="durationSec" type="number" min="5" step="1" value="15" />
+              <span class="field-unit">seconds</span>
+            </label>
+            <label><span>Step</span>
+              <input id="stepMs" type="number" min="1" step="1" value="100" />
+              <span class="field-unit">milliseconds</span>
+            </label>
+            <label><span>Target RPS</span>
+              <input id="rps" type="number" min="0" step="1" value="40" />
+              <input id="rpsRange" class="range-input" type="range" min="0" max="300" step="5" value="40" data-sync-target="rps" />
+              <span class="field-unit">requests/sec</span>
+            </label>
+            <label><span>Burst factor</span>
+              <input id="burstiness" type="number" min="0" max="1" step="0.05" value="0.4" />
+              <input id="burstinessRange" class="range-input" type="range" min="0" max="1" step="0.05" value="0.4" data-sync-target="burstiness" />
+              <span class="field-unit">0 means flat expected traffic. Higher values add a smooth burst wave.</span>
+            </label>
+            <label class="checkbox-field"><span>Traffic noise</span>
+              <span class="checkbox-row"><input id="trafficNoise" type="checkbox" /> <span>Sample arrivals with random noise around the expected traffic shape</span></span>
+              <span class="field-unit">Off by default. When disabled, arrivals follow the expected shape deterministically.</span>
+            </label>
+            <label><span>App active capacity</span>
+              <input id="maxConcurrent" type="number" min="1" step="1" value="24" />
+              <input id="maxConcurrentRange" class="range-input" type="range" min="1" max="120" step="1" value="24" data-sync-target="maxConcurrent" />
+              <span class="field-unit">max active requests</span>
+            </label>
+            <label><span>App pending capacity</span>
+              <input id="queueCapacity" type="number" min="0" step="1" value="3000" />
+              <input id="queueCapacityRange" class="range-input" type="range" min="0" max="6000" step="50" value="3000" data-sync-target="queueCapacity" />
+              <span class="field-unit">requests</span>
+              <span class="field-unit">Requests the model allows to remain pending before app timeout</span>
+            </label>
+            <label><span>App pending timeout</span>
+              <input id="maxQueueWaitMs" type="number" min="0" step="10" value="1500" />
+              <input id="maxQueueWaitMsRange" class="range-input" type="range" min="0" max="10000" step="50" value="1500" data-sync-target="maxQueueWaitMs" />
+              <span class="field-unit">How long a request may remain pending before the app path returns 503</span>
+            </label>
+            <div class="mini-chart">
+              <span id="trafficPreviewLabel">Expected offered traffic: 40 rps baseline with a 40% burst wave over 15s</span>
+              <canvas id="trafficPreview" width="220" height="56"></canvas>
+            </div>
+          </div>
+        </section>
+
+        <section id="limiterPanel" class="panel controls">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Policy</p>
+              <h2>Rate Limiter</h2>
+              <p class="panel-copy">Rules are evaluated in order. A request rejected by any rule becomes a 429.</p>
+            </div>
+          </div>
+          <div class="grid compact-grid">
+            <label><span>Window algorithm</span>
+              <select id="limiterType">
+                <option value="fixed">Fixed window counter</option>
+                <option value="sliding" selected>Sliding rolling window</option>
+              </select>
+              <span class="field-unit">How requests are counted inside each window</span>
+            </label>
+          </div>
+          <div class="window-stack">
+            <div class="window-head">
+              <div>
+                <strong>Rate limit rules</strong>
+                <span>Every request must pass all rules. Policy rejects are 429.</span>
+              </div>
+              <button id="addWindowBtn" type="button">Add rule</button>
+            </div>
+            <div id="windowRows"></div>
+            <p id="windowEmpty" class="window-empty" hidden>No rate-limit rules. Requests bypass policy limits; queue and service limits can still return 503s.</p>
+            <div class="mini-chart">
+              <span id="limiterPreviewLabel">Sliding: 30 / 1s</span>
+              <canvas id="limiterPreview" width="220" height="56"></canvas>
+            </div>
+          </div>
+        </section>
+
+        <section id="backendPanel" class="panel controls">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Backend</p>
+              <h2>Service Latency</h2>
+              <p class="panel-copy">Models app service time before a request tries the dependency.</p>
+            </div>
+          </div>
+          <div class="grid">
+            <label><span>Distribution</span>
+              <select id="latencyDist">
+                <option value="constant">Constant</option>
+                <option value="uniform">Uniform</option>
+                <option value="normal" selected>Normal / Gaussian</option>
+                <option value="lognormal">Log-normal</option>
+                <option value="exponential">Exponential</option>
+              </select>
+            </label>
+            <label><span id="latALabel">Mean latency</span>
+              <input id="latA" type="number" step="1" value="800" />
+              <input id="latARange" class="range-input" type="range" min="50" max="2000" step="25" value="800" data-sync-target="latA" />
+              <span id="latAHelp" class="field-unit">milliseconds</span>
+            </label>
+            <label><span id="latBLabel">Std deviation</span>
+              <input id="latB" type="number" step="1" value="35" />
+              <span id="latBHelp" class="field-unit">milliseconds</span>
+            </label>
+            <div class="mini-chart">
+              <span id="latencyPreviewLabel">Normal / Gaussian</span>
+              <canvas id="latencyPreview" width="220" height="56"></canvas>
+            </div>
+          </div>
+        </section>
+
+        <section id="dependencyPanel" class="panel controls">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Dependency</p>
+              <h2>Downstream Service</h2>
+              <p class="panel-copy">Models the external dependency the app is trying to protect.</p>
+            </div>
+          </div>
+          <div class="grid">
+            <label><span>Dependency active capacity</span>
+              <input id="depMaxConcurrent" type="number" min="1" step="1" value="12" />
+              <input id="depMaxConcurrentRange" class="range-input" type="range" min="1" max="80" step="1" value="12" data-sync-target="depMaxConcurrent" />
+              <span class="field-unit">max active requests</span>
+            </label>
+            <label><span>Dependency pending capacity</span>
+              <input id="depQueueCapacity" type="number" min="0" step="1" value="600" />
+              <input id="depQueueCapacityRange" class="range-input" type="range" min="0" max="3000" step="25" value="600" data-sync-target="depQueueCapacity" />
+              <span class="field-unit">requests</span>
+            </label>
+            <label><span>Dependency wait timeout</span>
+              <input id="depMaxQueueWaitMs" type="number" min="0" step="10" value="1000" />
+              <span class="field-unit">How long a request may remain pending for downstream capacity before 503</span>
+            </label>
+            <label><span>Dependency distribution</span>
+              <select id="depLatencyDist">
+                <option value="constant">Constant</option>
+                <option value="uniform">Uniform</option>
+                <option value="normal" selected>Normal / Gaussian</option>
+                <option value="lognormal">Log-normal</option>
+                <option value="exponential">Exponential</option>
+              </select>
+            </label>
+            <label><span id="depLatALabel">Mean latency</span>
+              <input id="depLatA" type="number" step="1" value="180" />
+              <input id="depLatARange" class="range-input" type="range" min="20" max="1200" step="10" value="180" data-sync-target="depLatA" />
+              <span id="depLatAHelp" class="field-unit">milliseconds</span>
+            </label>
+            <label><span id="depLatBLabel">Std deviation</span>
+              <input id="depLatB" type="number" step="1" value="60" />
+              <span id="depLatBHelp" class="field-unit">milliseconds</span>
+            </label>
+            <div class="mini-chart">
+              <span id="depLatencyPreviewLabel">Normal / Gaussian</span>
+              <canvas id="depLatencyPreview" width="220" height="56"></canvas>
+            </div>
+          </div>
+        </section>
+
+        <section id="controlPlanePanel" class="panel controls">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Control plane</p>
+              <h2>Rate-Limiter Latency</h2>
+              <p class="panel-copy">Models time spent deciding allow or reject before backend admission.</p>
+            </div>
+          </div>
+          <div class="grid">
+            <label><span>Decision distribution</span>
+              <select id="rlLatencyDist">
+                <option value="constant">Constant</option>
+                <option value="uniform">Uniform</option>
+                <option value="normal">Normal</option>
+                <option value="lognormal">Log-normal</option>
+                <option value="exponential">Exponential</option>
+              </select>
+            </label>
+            <label><span id="rlLatALabel">Decision latency</span>
+              <input id="rlLatA" type="number" step="1" value="8" />
+              <span id="rlLatAHelp" class="field-unit">milliseconds</span>
+            </label>
+            <label><span id="rlLatBLabel">Unused</span>
+              <input id="rlLatB" type="number" step="1" value="4" />
+              <span id="rlLatBHelp" class="field-unit">ignored for constant/exponential</span>
+            </label>
+            <div class="mini-chart">
+              <span id="rlLatencyPreviewLabel">Constant</span>
+              <canvas id="rlLatencyPreview" width="220" height="56"></canvas>
+            </div>
+          </div>
+        </section>
+      </aside>
+
+      <section class="content">
+        <section id="resultPanel" class="panel metrics">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Result</p>
+              <h2>Analytics</h2>
+              <p class="panel-copy">Summary from the latest run.</p>
+            </div>
+          </div>
+          <div id="kpis" class="kpi-grid"></div>
+        </section>
+
+        <section id="mainChartPanel" class="panel chart">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Time series</p>
+              <h2>Capacity, Admissions, and Rejections</h2>
+              <p class="panel-copy">Incoming Traffic/s shows what is actually fed into the limiter. Expected Traffic/s is the configured offered shape. 429 means limiter reject. 503 means app or dependency capacity ran out.</p>
+            </div>
+          </div>
+          <div id="seriesToggles" class="toggles"></div>
+          <div class="chart-frame">
+            <canvas id="mergedChart" width="1100" height="390" tabindex="-1"></canvas>
+            <div id="chartTooltip" class="chart-tooltip" hidden></div>
+          </div>
+        </section>
+
+        <section class="panel chart">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Distribution</p>
+              <h2>Latency Distribution by Status</h2>
+              <p class="panel-copy">Selectable latency distributions for HTTP 200, 429, 503, and overall.</p>
+            </div>
+          </div>
+          <div id="latencySeriesToggles" class="toggles"></div>
+          <div class="chart-frame">
+            <div class="chart-status-label">Select HTTP 200, 429, 503, or overall distribution</div>
+            <canvas id="latencyChart" width="1100" height="330"></canvas>
+          </div>
+          <div id="latencyStats" class="dist-stats"></div>
+        </section>
+      </section>
+    </div>
+
+    <section class="panel seo-copy" aria-labelledby="seoTitle">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">About</p>
+          <h2 id="seoTitle">What this simulator shows</h2>
+          <p class="panel-copy">Compact reference text for rate limiting, queue pressure, and failure behavior.</p>
+        </div>
+      </div>
+      <div class="seo-copy-body">
+        <p>This rate limiter simulator models how incoming traffic moves through a fast rate-limiter decision path, app pending capacity, and a downstream dependency. It is designed to make HTTP 429 rate-limit rejects, HTTP 503 capacity failures, queue buildup, pending requests, latency distribution, and bottleneck behavior easier to understand in a distributed system.</p>
+        <p>The simulator supports fixed-window and sliding-window thinking for policy behavior, and it highlights how limiter rules protect backend capacity by reducing overload before app timeouts and downstream saturation create visible failures.</p>
+      </div>
+    </section>
+
+    <footer class="page-footer">
+      <a class="about-link" href="https://amir-h-rassafi.github.io/" target="_blank" rel="noreferrer">About me</a>
+    </footer>
+  </main>
+  <script src="./simulation.js"></script>
+  <script src="./charts.js"></script>
+  <script src="./overview.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
