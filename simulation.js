@@ -147,17 +147,26 @@ function runSimulation(cfg) {
     rlLatB,
     latencyDist,
     latA,
-    latB
+    latB,
+    depMaxConcurrent,
+    depQueueCapacity,
+    depMaxQueueWaitMs,
+    depLatencyDist,
+    depLatA,
+    depLatB
   } = cfg;
 
   const limiters = windows.map((w) => createLimiter(limiterType, w.limit, w.windowMs));
   const windowSeries = makeWindowSeries(windows);
 
   const steps = Math.floor((durationSec * 1000) / stepMs);
-  const inflight = [];
-  const queue = [];
+  const appInflight = [];
+  const appQueue = [];
+  const depInflight = [];
+  const depQueue = [];
   const limiterPending = [];
   const latencies = [];
+  const latencyByStatus = { s200: [], s429: [], s503: [] };
   const limiterLatencies = [];
 
   const timeline = [];
@@ -168,9 +177,68 @@ function runSimulation(cfg) {
   let total503 = 0;
   let totalDroppedFull = 0;
   let totalDroppedWait = 0;
+  let totalDepDroppedFull = 0;
+  let totalDepDroppedWait = 0;
+  let totalEnteredApp = 0;
+  let totalEnteredDependency = 0;
   let sumLatency = 0;
   let sumQueueDelay = 0;
   let peakLimiterPending = 0;
+  let peakAppQueue = 0;
+  let peakDepQueue = 0;
+  let peakAppInflight = 0;
+  let peakDepInflight = 0;
+
+  function startDependency(now, req) {
+    if (depInflight.length < depMaxConcurrent) {
+      const depServiceMs = sampleLatencyMs(depLatencyDist, depLatA, depLatB);
+      depInflight.push({
+        endMs: now + depServiceMs,
+        depServiceMs,
+        appServiceMs: req.appServiceMs,
+        appQueueDelayMs: req.appQueueDelayMs,
+        depQueueDelayMs: now - req.depArrivalMs
+      });
+      totalEnteredDependency += 1;
+      return true;
+    }
+
+    if (depQueue.length < depQueueCapacity) {
+      depQueue.push(req);
+      totalEnteredDependency += 1;
+      return true;
+    }
+
+    total503 += 1;
+    totalDroppedFull += 1;
+    totalDepDroppedFull += 1;
+    latencyByStatus.s503.push(req.appQueueDelayMs + req.appServiceMs);
+    return false;
+  }
+
+  function startApp(now, req) {
+    if (appInflight.length < maxConcurrent) {
+      const appServiceMs = sampleLatencyMs(latencyDist, latA, latB);
+      appInflight.push({
+        endMs: now + appServiceMs,
+        appServiceMs,
+        appQueueDelayMs: now - req.arrivalMs
+      });
+      totalEnteredApp += 1;
+      return true;
+    }
+
+    if (appQueue.length < queueCapacity) {
+      appQueue.push(req);
+      totalEnteredApp += 1;
+      return true;
+    }
+
+    total503 += 1;
+    totalDroppedFull += 1;
+    latencyByStatus.s503.push(now - req.arrivalMs);
+    return false;
+  }
 
   for (let step = 0; step <= steps; step += 1) {
     const now = step * stepMs;
@@ -178,35 +246,76 @@ function runSimulation(cfg) {
     let step503 = 0;
     let stepAccepted = 0;
 
-    for (let i = inflight.length - 1; i >= 0; i -= 1) {
-      if (inflight[i].endMs <= now) {
-        const req = inflight[i];
-        inflight.splice(i, 1);
+    for (let i = depInflight.length - 1; i >= 0; i -= 1) {
+      if (depInflight[i].endMs <= now) {
+        const req = depInflight[i];
+        depInflight.splice(i, 1);
         totalServed += 1;
-        if (req.queueDelayMs > 0) totalDelayedServed += 1;
-        const totalLat = req.serviceMs + req.queueDelayMs;
+        const totalQueueDelay = req.appQueueDelayMs + req.depQueueDelayMs;
+        if (totalQueueDelay > 0) totalDelayedServed += 1;
+        const totalLat = req.appServiceMs + req.depServiceMs + totalQueueDelay;
         latencies.push(totalLat);
+        latencyByStatus.s200.push(totalLat);
         sumLatency += totalLat;
-        sumQueueDelay += req.queueDelayMs;
+        sumQueueDelay += totalQueueDelay;
       }
     }
 
-    for (let i = queue.length - 1; i >= 0; i -= 1) {
-      if (now - queue[i].arrivalMs >= maxQueueWaitMs) {
-        queue.splice(i, 1);
+    for (let i = depQueue.length - 1; i >= 0; i -= 1) {
+      if (now - depQueue[i].depArrivalMs >= depMaxQueueWaitMs) {
+        const req = depQueue[i];
+        depQueue.splice(i, 1);
         total503 += 1;
         totalDroppedWait += 1;
+        totalDepDroppedWait += 1;
+        latencyByStatus.s503.push((now - req.depArrivalMs) + req.appQueueDelayMs + req.appServiceMs);
         step503 += 1;
       }
     }
 
-    while (queue.length > 0 && inflight.length < maxConcurrent) {
-      const q = queue.shift();
-      const serviceMs = sampleLatencyMs(latencyDist, latA, latB);
-      inflight.push({
-        endMs: now + serviceMs,
-        serviceMs,
-        queueDelayMs: now - q.arrivalMs
+    while (depQueue.length > 0 && depInflight.length < depMaxConcurrent) {
+      const req = depQueue.shift();
+      const depServiceMs = sampleLatencyMs(depLatencyDist, depLatA, depLatB);
+      depInflight.push({
+        endMs: now + depServiceMs,
+        depServiceMs,
+        appServiceMs: req.appServiceMs,
+        appQueueDelayMs: req.appQueueDelayMs,
+        depQueueDelayMs: now - req.depArrivalMs
+      });
+    }
+
+    for (let i = appInflight.length - 1; i >= 0; i -= 1) {
+      if (appInflight[i].endMs <= now) {
+        const req = appInflight[i];
+        appInflight.splice(i, 1);
+        const entered = startDependency(now, {
+          depArrivalMs: now,
+          appServiceMs: req.appServiceMs,
+          appQueueDelayMs: req.appQueueDelayMs
+        });
+        if (!entered) step503 += 1;
+      }
+    }
+
+    for (let i = appQueue.length - 1; i >= 0; i -= 1) {
+      if (now - appQueue[i].arrivalMs >= maxQueueWaitMs) {
+        const req = appQueue[i];
+        appQueue.splice(i, 1);
+        total503 += 1;
+        totalDroppedWait += 1;
+        latencyByStatus.s503.push(now - req.arrivalMs);
+        step503 += 1;
+      }
+    }
+
+    while (appQueue.length > 0 && appInflight.length < maxConcurrent) {
+      const req = appQueue.shift();
+      const appServiceMs = sampleLatencyMs(latencyDist, latA, latB);
+      appInflight.push({
+        endMs: now + appServiceMs,
+        appServiceMs,
+        appQueueDelayMs: now - req.arrivalMs
       });
     }
 
@@ -219,7 +328,8 @@ function runSimulation(cfg) {
       const decisionLatencyMs = sampleLatencyMs(rlLatencyDist, rlLatA, rlLatB);
       limiterPending.push({
         decisionReadyMs: now + decisionLatencyMs,
-        decisionLatencyMs
+        decisionLatencyMs,
+        arrivalMs: now
       });
       limiterLatencies.push(decisionLatencyMs);
     }
@@ -241,6 +351,7 @@ function runSimulation(cfg) {
       if (blockedIdx >= 0) {
         total429 += 1;
         step429 += 1;
+        latencyByStatus.s429.push(pendingReq.decisionLatencyMs);
         windowSeries[blockedIdx].blocked += 1;
         continue;
       }
@@ -250,18 +361,15 @@ function runSimulation(cfg) {
       }
       stepAccepted += 1;
 
-      if (inflight.length < maxConcurrent) {
-        const serviceMs = sampleLatencyMs(latencyDist, latA, latB);
-        inflight.push({ endMs: now + serviceMs, serviceMs, queueDelayMs: 0 });
-      } else if (queue.length < queueCapacity) {
-        queue.push({ arrivalMs: now });
-      } else {
-        total503 += 1;
-        totalDroppedFull += 1;
-        step503 += 1;
-      }
+      const entered = startApp(now, { arrivalMs: now });
+      if (!entered) step503 += 1;
     }
+
     peakLimiterPending = Math.max(peakLimiterPending, limiterPending.length);
+    peakAppQueue = Math.max(peakAppQueue, appQueue.length);
+    peakDepQueue = Math.max(peakDepQueue, depQueue.length);
+    peakAppInflight = Math.max(peakAppInflight, appInflight.length);
+    peakDepInflight = Math.max(peakDepInflight, depInflight.length);
 
     for (let i = 0; i < limiters.length; i += 1) {
       const count = limiters[i].countAt(now);
@@ -271,8 +379,10 @@ function runSimulation(cfg) {
 
     timeline.push({
       tSec: now / 1000,
-      active: inflight.length,
-      queued: queue.length,
+      active: appInflight.length,
+      queued: appQueue.length,
+      depActive: depInflight.length,
+      depQueued: depQueue.length,
       limiterPending: limiterPending.length,
       arrivalsPerSec: Math.round((arrivals * 1000) / stepMs),
       acceptedPerSec: Math.round((stepAccepted * 1000) / stepMs),
@@ -282,6 +392,9 @@ function runSimulation(cfg) {
   }
 
   latencies.sort((a, b) => a - b);
+  latencyByStatus.s200.sort((a, b) => a - b);
+  latencyByStatus.s429.sort((a, b) => a - b);
+  latencyByStatus.s503.sort((a, b) => a - b);
   limiterLatencies.sort((a, b) => a - b);
   const avgLatency = totalServed ? sumLatency / totalServed : 0;
   const avgQueueDelay = totalServed ? sumQueueDelay / totalServed : 0;
@@ -292,15 +405,20 @@ function runSimulation(cfg) {
   return {
     totals: {
       arrived: totalArrived,
+      enteredApp: totalEnteredApp,
+      enteredDependency: totalEnteredDependency,
       served: totalServed,
       delayedServed: totalDelayedServed,
       droppedFull: totalDroppedFull,
       droppedWait: totalDroppedWait,
+      depDroppedFull: totalDepDroppedFull,
+      depDroppedWait: totalDepDroppedWait,
       rate503: total503,
       rate429: total429,
       servedPct: totalArrived ? (100 * totalServed) / totalArrived : 0,
       rate503Pct: totalArrived ? (100 * total503) / totalArrived : 0,
-      rate429Pct: totalArrived ? (100 * total429) / totalArrived : 0
+      rate429Pct: totalArrived ? (100 * total429) / totalArrived : 0,
+      protectionPct: totalArrived ? (100 * total429) / totalArrived : 0
     },
     latency: {
       avg: avgLatency,
@@ -308,13 +426,27 @@ function runSimulation(cfg) {
       p50: percentile(latencies, 50),
       p95: percentile(latencies, 95),
       p99: percentile(latencies, 99),
-      samples: latencies
+      samples: latencies,
+      byStatus: latencyByStatus
     },
     limiterLatency: {
       avg: avgLimiterLatency,
       p95: percentile(limiterLatencies, 95),
       p99: percentile(limiterLatencies, 99),
       peakPending: peakLimiterPending
+    },
+    queues: {
+      peakLimiterPending,
+      peakAppQueue,
+      peakDepQueue,
+      peakAppInflight,
+      peakDepInflight
+    },
+    protection: {
+      blockedByLimiter: total429,
+      appLoadAvoided: total429,
+      dependencyLoadAvoided: total429,
+      protectionPct: totalArrived ? (100 * total429) / totalArrived : 0
     },
     windowSeries,
     timeline

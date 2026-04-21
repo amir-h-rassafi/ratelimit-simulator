@@ -1,38 +1,3 @@
-function formatNum(n) {
-  return Number.isFinite(n) ? n.toLocaleString() : "0";
-}
-
-function formatMs(v) {
-  return `${Math.round(v)} ms`;
-}
-
-function renderKpis(result) {
-  const { totals, latency, limiterLatency, windowSeries } = result;
-  const mostBlocked = windowSeries
-    .map((w) => ({ label: w.label, blocked: w.blocked }))
-    .sort((a, b) => b.blocked - a.blocked)[0];
-
-  const items = [
-    { name: "Arrived", value: formatNum(totals.arrived), kind: "neutral" },
-    { name: "Served", value: `${formatNum(totals.served)} (${totals.servedPct.toFixed(1)}%)`, kind: "served" },
-    { name: "Delayed Served", value: formatNum(totals.delayedServed), kind: "queue" },
-    { name: "429 Rate Limited", value: `${formatNum(totals.rate429)} (${totals.rate429Pct.toFixed(1)}%)`, kind: "danger" },
-    { name: "503 Unavailable", value: `${formatNum(totals.rate503)} (${totals.rate503Pct.toFixed(1)}%)`, kind: "danger" },
-    { name: "Queue Timeout 503", value: formatNum(totals.droppedWait), kind: "danger" },
-    { name: "Queue Full 503", value: formatNum(totals.droppedFull), kind: "danger" },
-    { name: "Limiter Rule", value: mostBlocked ? `${mostBlocked.label} (${formatNum(mostBlocked.blocked)})` : "No rules", kind: "queue" },
-    { name: "Latency p95", value: formatMs(latency.p95), kind: "latency" },
-    { name: "Avg Queue Delay", value: formatMs(latency.avgQueueDelay), kind: "queue" },
-    { name: "Limiter Lat p95", value: formatMs(limiterLatency.p95), kind: "latency" },
-    { name: "Limiter Pending Peak", value: formatNum(limiterLatency.peakPending), kind: "queue" }
-  ];
-
-  const kpiRoot = document.getElementById("kpis");
-  kpiRoot.innerHTML = items.map(({ name, value, kind }) => (
-    `<div class="kpi" data-kind="${kind}"><div class="name">${name}</div><div class="value">${value}</div></div>`
-  )).join("");
-}
-
 function setText(id, text) {
   const el = document.getElementById(id);
   if (el) el.textContent = text;
@@ -45,6 +10,12 @@ function updateDistributionFieldLabels() {
   setText("latBLabel", latencyCopy.bLabel);
   setText("latBHelp", latencyCopy.bHelp);
 
+  const depCopy = distributionFieldCopy(document.getElementById("depLatencyDist").value);
+  setText("depLatALabel", depCopy.aLabel);
+  setText("depLatAHelp", depCopy.aHelp);
+  setText("depLatBLabel", depCopy.bLabel);
+  setText("depLatBHelp", depCopy.bHelp);
+
   const rlCopy = distributionFieldCopy(document.getElementById("rlLatencyDist").value, "Decision");
   setText("rlLatALabel", rlCopy.aLabel);
   setText("rlLatAHelp", rlCopy.aHelp);
@@ -53,11 +24,6 @@ function updateDistributionFieldLabels() {
 }
 
 function updateLimiterAlgorithmCopy() {
-  const type = document.getElementById("limiterType").value;
-  const text = type === "sliding"
-    ? "Every cascaded row below uses sliding rolling windows: each counter covers the last N seconds."
-    : "Every cascaded row below uses fixed window counters: each counter resets at the window boundary.";
-  setText("limiterAlgorithmNote", text);
   updateWindowRowSummaries();
 }
 
@@ -70,6 +36,9 @@ function updateDistributionPreviews() {
   const burstiness = getNum("burstiness");
   setText("trafficPreviewLabel", trafficPreviewLabel(durationSec, rps, burstiness));
   drawSparkline("trafficPreview", buildTrafficPreview(durationSec, rps, burstiness), "#1a73e8");
+  const windows = readWindows();
+  setText("limiterPreviewLabel", limiterPreviewLabel(windows, document.getElementById("limiterType").value));
+  drawLimiterWindowPreview("limiterPreview", windows, document.getElementById("limiterType").value, "#d93025");
   drawDistributionPreview(
     "latencyPreview",
     "latencyPreviewLabel",
@@ -77,6 +46,14 @@ function updateDistributionPreviews() {
     getNum("latA"),
     getNum("latB"),
     "#5f6368"
+  );
+  drawDistributionPreview(
+    "depLatencyPreview",
+    "depLatencyPreviewLabel",
+    document.getElementById("depLatencyDist").value,
+    getNum("depLatA"),
+    getNum("depLatB"),
+    "#7b1fa2"
   );
   drawDistributionPreview(
     "rlLatencyPreview",
@@ -90,7 +67,8 @@ function updateDistributionPreviews() {
 
 const COOKIE_NAME = "rl_sim_state";
 const COOKIE_TTL_SEC = 60 * 60 * 24 * 180;
-const UI_STATE_VERSION = 8;
+const UI_STATE_VERSION = 13;
+const PANEL_STATE_STORAGE_KEY = "rl_sim_collapsed_panels";
 const CONTROL_IDS = [
   "durationSec",
   "stepMs",
@@ -105,7 +83,13 @@ const CONTROL_IDS = [
   "latB",
   "rlLatencyDist",
   "rlLatA",
-  "rlLatB"
+  "rlLatB",
+  "depMaxConcurrent",
+  "depQueueCapacity",
+  "depMaxQueueWaitMs",
+  "depLatencyDist",
+  "depLatA",
+  "depLatB"
 ];
 
 function setCookie(name, value, maxAgeSec) {
@@ -121,6 +105,24 @@ function getCookie(name) {
     }
   }
   return null;
+}
+
+function saveCollapsedPanelsToStorage() {
+  try {
+    const payload = Object.fromEntries(collapsedPanels.entries());
+    window.localStorage.setItem(PANEL_STATE_STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+  }
+}
+
+function loadCollapsedPanelsFromStorage() {
+  try {
+    const raw = window.localStorage.getItem(PANEL_STATE_STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
 function loadStateFromCookie() {
@@ -143,7 +145,9 @@ function getUiState() {
     version: UI_STATE_VERSION,
     controls,
     windows: readWindows(),
-    visibility: Object.fromEntries(seriesVisibility.entries())
+    visibility: Object.fromEntries(seriesVisibility.entries()),
+    latencyVisibility: Object.fromEntries(latencyVisibility.entries()),
+    collapsedPanels: Object.fromEntries(collapsedPanels.entries())
   };
 }
 
@@ -174,16 +178,41 @@ function applyStateToUi(saved) {
     updateWindowRowSummaries();
   }
 
+  refreshRangeInputs();
+
   if (saved.visibility && typeof saved.visibility === "object") {
     for (const [key, val] of Object.entries(saved.visibility)) {
       seriesVisibility.set(key, Boolean(val));
     }
   }
+
+  if (saved.latencyVisibility && typeof saved.latencyVisibility === "object") {
+    for (const [key, val] of Object.entries(saved.latencyVisibility)) {
+      latencyVisibility.set(key, Boolean(val));
+    }
+  }
+
+  const storedPanels = loadCollapsedPanelsFromStorage();
+  if (storedPanels && typeof storedPanels === "object") {
+    for (const [key, val] of Object.entries(storedPanels)) {
+      collapsedPanels.set(key, Boolean(val));
+    }
+  } else if (saved.collapsedPanels && typeof saved.collapsedPanels === "object") {
+    for (const [key, val] of Object.entries(saved.collapsedPanels)) {
+      collapsedPanels.set(key, Boolean(val));
+    }
+  }
+
+  applyCollapsedPanels();
+  saveCollapsedPanelsToStorage();
 }
 
 const seriesVisibility = new Map();
-const REQUIRED_SERIES = new Set(["arrivals"]);
-const DEFAULT_VISIBLE_SERIES = new Set(["arrivals", "accepted", "r429", "r503", "queue", "active"]);
+const latencyVisibility = new Map();
+const collapsedPanels = new Map();
+const REQUIRED_SERIES = new Set();
+const DEFAULT_VISIBLE_SERIES = new Set(["arrivals", "r429", "r503"]);
+const DEFAULT_VISIBLE_LATENCY = new Set(["s200", "s429", "s503"]);
 const mergedChartState = {
   fullSeries: [],
   fullTimeline: [],
@@ -191,6 +220,8 @@ const mergedChartState = {
   timeline: [],
   hoverIndex: null
 };
+let resultsDirty = false;
+let runInProgress = false;
 const MAX_CHART_POINTS = 1600;
 
 function downsampleChartData(series, timeline) {
@@ -229,10 +260,12 @@ function buildMergedSeries(result) {
     { key: "accepted", label: "Accepted/s", color: "#188038", values: result.timeline.map((p) => p.acceptedPerSec), emphasis: true, fill: true },
     { key: "r429", label: "429/s", color: "#d93025", values: result.timeline.map((p) => p.r429PerSec), emphasis: true, fill: true },
     { key: "r503", label: "503/s", color: "#a142f4", values: result.timeline.map((p) => p.r503PerSec), emphasis: true },
-    { key: "queue", label: "Queue", color: "#b06000", values: result.timeline.map((p) => p.queued) },
-    { key: "active", label: "Active", color: "#1a73e8", values: result.timeline.map((p) => p.active) },
-    { key: "arrivals", label: "Arrivals/s", color: "#3c4043", values: result.timeline.map((p) => p.arrivalsPerSec), required: true, emphasis: true },
-    { key: "rlPending", label: "Limiter Pending", color: "#59636e", values: result.timeline.map((p) => p.limiterPending) }
+    { key: "queue", label: "App Pending", color: "#b06000", values: result.timeline.map((p) => p.queued) },
+    { key: "depQueued", label: "Dependency Pending", color: "#7b1fa2", values: result.timeline.map((p) => p.depQueued) },
+    { key: "active", label: "App Active", color: "#1a73e8", values: result.timeline.map((p) => p.active) },
+    { key: "depActive", label: "Dependency Active", color: "#5e35b1", values: result.timeline.map((p) => p.depActive) },
+    { key: "arrivals", label: "Incoming Traffic/s", color: "#3c4043", values: result.timeline.map((p) => p.arrivalsPerSec), emphasis: true },
+    { key: "rlPending", label: "Limiter Queue", color: "#59636e", values: result.timeline.map((p) => p.limiterPending) }
   ];
   const windows = result.windowSeries.map((w, i) => ({
     key: `window_${i}`,
@@ -263,7 +296,7 @@ function renderSeriesToggles(series) {
       seriesVisibility.set(s.key, e.target.checked);
       const visible = series.filter((x) => x.required || REQUIRED_SERIES.has(x.key) || seriesVisibility.get(x.key));
       setMergedChartDisplay(
-        visible.length ? visible : [series[0]],
+        visible.length ? visible : [],
         mergedChartState.fullTimeline,
         mergedChartState.hoverIndex
       );
@@ -271,6 +304,87 @@ function renderSeriesToggles(series) {
     });
     root.appendChild(wrapper);
   }
+}
+
+function buildLatencySeries(result) {
+  return [
+    { key: "s200", label: `HTTP 200 (${formatNum(result.latency.byStatus.s200.length)})`, color: "#188038", samples: result.latency.byStatus.s200, emphasis: true },
+    { key: "s429", label: `HTTP 429 (${formatNum(result.latency.byStatus.s429.length)})`, color: "#d93025", samples: result.latency.byStatus.s429, emphasis: true },
+    { key: "s503", label: `HTTP 503 (${formatNum(result.latency.byStatus.s503.length)})`, color: "#a142f4", samples: result.latency.byStatus.s503, emphasis: true },
+    { key: "overall", label: `Overall (${formatNum(result.latency.samples.length + result.latency.byStatus.s429.length + result.latency.byStatus.s503.length)})`, color: "#5f6368", samples: [...result.latency.samples, ...result.latency.byStatus.s429, ...result.latency.byStatus.s503] }
+  ];
+}
+
+function renderLatencyToggles(series, result) {
+  const root = document.getElementById("latencySeriesToggles");
+  if (!root) return;
+  root.innerHTML = "";
+  for (const s of series) {
+    if (!latencyVisibility.has(s.key)) latencyVisibility.set(s.key, DEFAULT_VISIBLE_LATENCY.has(s.key));
+    const wrapper = document.createElement("label");
+    wrapper.innerHTML = `
+      <input type="checkbox" ${latencyVisibility.get(s.key) ? "checked" : ""} />
+      <span>${s.label}</span>
+    `;
+    wrapper.style.setProperty("--legend-color", s.color);
+    wrapper.querySelector("input").addEventListener("change", (e) => {
+      latencyVisibility.set(s.key, e.target.checked);
+      updateLatencyChart(result);
+      saveStateToCookie();
+    });
+    root.appendChild(wrapper);
+  }
+}
+
+function updateLatencyChart(result) {
+  const latencySeries = buildLatencySeries(result);
+  const visible = latencySeries.filter((s) => latencyVisibility.get(s.key));
+  drawLatencyHistogram(visible);
+}
+
+const DEFAULT_COLLAPSED_PANELS = {
+  trafficPanel: true,
+  limiterPanel: true,
+  backendPanel: true,
+  dependencyPanel: true,
+  controlPlanePanel: true
+};
+
+function applyCollapsedPanels() {
+  document.querySelectorAll('.sidebar .panel.controls').forEach((panel) => {
+    const key = panel.id;
+    const collapsed = collapsedPanels.has(key) ? collapsedPanels.get(key) : Boolean(DEFAULT_COLLAPSED_PANELS[key]);
+    panel.classList.toggle('is-collapsed', collapsed);
+    const btn = panel.querySelector('.panel-collapse-btn');
+    if (btn) {
+      btn.setAttribute('aria-expanded', String(!collapsed));
+      btn.textContent = collapsed ? 'Expand' : 'Collapse';
+    }
+  });
+}
+
+function initCollapsiblePanels() {
+  document.querySelectorAll('.sidebar .panel.controls').forEach((panel) => {
+    if (!panel.id) return;
+    if (!collapsedPanels.has(panel.id) && Object.prototype.hasOwnProperty.call(DEFAULT_COLLAPSED_PANELS, panel.id)) {
+      collapsedPanels.set(panel.id, DEFAULT_COLLAPSED_PANELS[panel.id]);
+    }
+    const heading = panel.querySelector('.panel-heading');
+    if (!heading || heading.querySelector('.panel-collapse-btn')) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'panel-collapse-btn';
+    btn.addEventListener('click', () => {
+      const next = !panel.classList.contains('is-collapsed');
+      collapsedPanels.set(panel.id, next);
+      applyCollapsedPanels();
+      saveCollapsedPanelsToStorage();
+      saveStateToCookie();
+    });
+    heading.appendChild(btn);
+  });
+  applyCollapsedPanels();
+  saveCollapsedPanelsToStorage();
 }
 
 function formatChartValue(value) {
@@ -328,10 +442,27 @@ function setChecklistItem(id, state, text) {
   item.textContent = text;
 }
 
+function updateRunButton() {
+  const button = document.getElementById("runBtn");
+  if (!button) return;
+  const state = runInProgress ? "running" : resultsDirty ? "stale" : "current";
+  button.dataset.state = state;
+  button.disabled = runInProgress;
+  button.innerHTML = runInProgress
+    ? "<span>Running Simulation</span><small>Updating charts</small>"
+    : resultsDirty
+      ? "<span>Run Simulation</span><small>Parameters changed</small>"
+      : "<span>Run Simulation</span><small>Results current</small>";
+}
+
 function markConfigChanged() {
+  resultsDirty = true;
+  updateRunButton();
 }
 
 function markResultsCurrent() {
+  resultsDirty = false;
+  updateRunButton();
 }
 
 function scrollToResults() {
@@ -342,6 +473,29 @@ function scrollToResults() {
   window.setTimeout(() => {
     document.getElementById("mergedChart")?.focus({ preventScroll: true });
   }, 350);
+}
+
+function refreshRangeInputs() {
+  document.querySelectorAll('.range-input').forEach((range) => {
+    const target = document.getElementById(range.dataset.syncTarget);
+    if (target) range.value = target.value;
+  });
+}
+
+function syncRangeInputs() {
+  document.querySelectorAll('.range-input').forEach((range) => {
+    if (range.dataset.bound === "1") return;
+    const target = document.getElementById(range.dataset.syncTarget);
+    if (!target) return;
+    range.dataset.bound = "1";
+    const syncFromTarget = () => { range.value = target.value; };
+    range.addEventListener('input', () => {
+      target.value = range.value;
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    target.addEventListener('input', syncFromTarget);
+    syncFromTarget();
+  });
 }
 
 function createNumberField({ label, className, min, step, value, unit }) {
@@ -432,12 +586,14 @@ function addWindowRow(windowMs, limit) {
   removeButton.addEventListener("click", () => {
     row.remove();
     updateWindowRowSummaries();
+    updateDistributionPreviews();
     saveStateToCookie();
     markConfigChanged();
   });
 
   const handleInput = () => {
     updateWindowRowSummaries();
+    updateDistributionPreviews();
     saveStateToCookie();
     markConfigChanged();
   };
@@ -446,6 +602,7 @@ function addWindowRow(windowMs, limit) {
 
   document.getElementById("windowRows").appendChild(row);
   updateWindowRowSummaries();
+  updateDistributionPreviews();
 }
 
 function readWindows() {
@@ -474,14 +631,21 @@ function readConfig() {
     rlLatB: getNum("rlLatB"),
     latencyDist: document.getElementById("latencyDist").value,
     latA: getNum("latA"),
-    latB: getNum("latB")
+    latB: getNum("latB"),
+    depMaxConcurrent: clamp(getNum("depMaxConcurrent"), 1, 100000),
+    depQueueCapacity: clamp(getNum("depQueueCapacity"), 0, 1000000),
+    depMaxQueueWaitMs: clamp(getNum("depMaxQueueWaitMs"), 0, 600000),
+    depLatencyDist: document.getElementById("depLatencyDist").value,
+    depLatA: getNum("depLatA"),
+    depLatB: getNum("depLatB")
   };
 }
 
 function runAndRender(options = {}) {
   const cfg = readConfig();
   const result = runSimulation(cfg);
-  renderKpis(result);
+  const baseline = runSimulation({ ...cfg, windows: [] });
+  renderKpis(result, baseline);
   updateDistributionPreviews();
 
   const merged = buildMergedSeries(result);
@@ -489,11 +653,26 @@ function runAndRender(options = {}) {
   const visible = merged.filter((s) => s.required || REQUIRED_SERIES.has(s.key) || seriesVisibility.get(s.key));
   mergedChartState.fullSeries = merged;
   mergedChartState.fullTimeline = result.timeline;
-  setMergedChartDisplay(visible.length ? visible : [merged[0]], result.timeline);
-  drawLatencyHistogram(result.latency.samples);
+  setMergedChartDisplay(visible, result.timeline);
+  renderLatencyToggles(buildLatencySeries(result), result);
+  updateLatencyChart(result);
+  renderLatencyStats(result);
   saveStateToCookie();
   markResultsCurrent();
   if (options.scrollToResults) scrollToResults();
+}
+
+function runWithAnimation(options = {}) {
+  if (runInProgress) return;
+  runInProgress = true;
+  updateRunButton();
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      runAndRender(options);
+      runInProgress = false;
+      updateRunButton();
+    });
+  });
 }
 
 function boot() {
@@ -501,11 +680,15 @@ function boot() {
   mergedChart.addEventListener("mousemove", renderMergedChartTooltip);
   mergedChart.addEventListener("mouseleave", hideMergedChartTooltip);
   document.getElementById("addWindowBtn").addEventListener("click", () => {
-    addWindowRow(1000, 85);
+    addWindowRow(1000, 30);
     saveStateToCookie();
     markConfigChanged();
   });
-  document.getElementById("runBtn").addEventListener("click", () => runAndRender({ scrollToResults: true }));
+  document.getElementById("runBtn").addEventListener("click", () => runWithAnimation({ scrollToResults: true }));
+  updateRunButton();
+  initCollapsiblePanels();
+  syncRangeInputs();
+  refreshRangeInputs();
   for (const id of CONTROL_IDS) {
     const el = document.getElementById(id);
     if (el) el.addEventListener("input", () => {
@@ -520,9 +703,10 @@ function boot() {
     });
   }
 
-  addWindowRow(1000, 85);
+  addWindowRow(1000, 30);
   applyStateToUi(loadStateFromCookie());
   runAndRender();
+  updateRunButton();
 }
 
 boot();

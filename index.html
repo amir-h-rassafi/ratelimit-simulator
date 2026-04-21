@@ -12,7 +12,7 @@
       <div class="hero">
         <p class="eyebrow">Simulator</p>
         <h1>Rate Limiter Simulator</h1>
-        <p>Traffic arrives first, policy rules decide admission, then accepted requests compete for backend capacity.</p>
+        <p>Traffic flows through a fast limiter, modeled app pending requests, and a downstream dependency. The simulator shows where pressure accumulates, which timeout contract fails, and how much the limiter protects the system.</p>
       </div>
       <div class="header-actions">
         <button id="runBtn" class="run-button" type="button">
@@ -33,22 +33,26 @@
         <span>Generate arrivals with RPS and burst shape.</span>
       </div>
       <div>
-        <strong>2. Rate limit</strong>
-        <span>Each request must pass every sliding window rule.</span>
+        <strong>2. Limiter queue</strong>
+        <span>Every arrival waits for a fast allow or reject decision.</span>
       </div>
       <div>
-        <strong>3. Backend</strong>
-        <span>Accepted requests run, queue, or time out.</span>
+        <strong>3. Policy</strong>
+        <span>Rules produce 429 and keep later queues under control.</span>
       </div>
       <div>
-        <strong>4. Read chart</strong>
-        <span>Arrivals always stay visible as the baseline.</span>
+        <strong>4. App pending</strong>
+        <span>When app capacity is full, requests remain pending until capacity opens or timeout expires.</span>
+      </div>
+      <div>
+        <strong>5. Dependency pending</strong>
+        <span>Downstream saturation creates its own pending state, deadline, and 503.</span>
       </div>
     </section>
 
     <div class="layout">
       <aside class="sidebar">
-        <section class="panel controls">
+        <section id="trafficPanel" class="panel controls">
           <div class="panel-heading">
             <div>
               <p class="eyebrow">Inputs</p>
@@ -58,7 +62,7 @@
           </div>
           <div class="grid">
             <label><span>Duration</span>
-              <input id="durationSec" type="number" min="5" step="1" value="30" />
+              <input id="durationSec" type="number" min="5" step="1" value="15" />
               <span class="field-unit">seconds</span>
             </label>
             <label><span>Step</span>
@@ -67,23 +71,29 @@
             </label>
             <label><span>Target RPS</span>
               <input id="rps" type="number" min="0" step="1" value="90" />
+              <input id="rpsRange" class="range-input" type="range" min="0" max="300" step="5" value="90" data-sync-target="rps" />
               <span class="field-unit">requests/sec</span>
             </label>
             <label><span>Burst factor</span>
               <input id="burstiness" type="number" min="0" max="1" step="0.05" value="0.4" />
+              <input id="burstinessRange" class="range-input" type="range" min="0" max="1" step="0.05" value="0.4" data-sync-target="burstiness" />
               <span class="field-unit">0 to 1</span>
             </label>
-            <label><span>Max concurrent</span>
+            <label><span>App active capacity</span>
               <input id="maxConcurrent" type="number" min="1" step="1" value="24" />
-              <span class="field-unit">in flight</span>
+              <input id="maxConcurrentRange" class="range-input" type="range" min="1" max="120" step="1" value="24" data-sync-target="maxConcurrent" />
+              <span class="field-unit">max active requests</span>
             </label>
-            <label><span>Queue capacity</span>
+            <label><span>App pending capacity</span>
               <input id="queueCapacity" type="number" min="0" step="1" value="3000" />
+              <input id="queueCapacityRange" class="range-input" type="range" min="0" max="6000" step="50" value="3000" data-sync-target="queueCapacity" />
               <span class="field-unit">requests</span>
+              <span class="field-unit">Requests the model allows to remain pending before app timeout</span>
             </label>
-            <label><span>Max queue wait</span>
+            <label><span>App pending timeout</span>
               <input id="maxQueueWaitMs" type="number" min="0" step="10" value="1500" />
-              <span class="field-unit">milliseconds</span>
+              <input id="maxQueueWaitMsRange" class="range-input" type="range" min="0" max="10000" step="50" value="1500" data-sync-target="maxQueueWaitMs" />
+              <span class="field-unit">How long a request may remain pending before the app path returns 503</span>
             </label>
             <div class="mini-chart">
               <span id="trafficPreviewLabel">90 rps with 40% burst wave over 30s</span>
@@ -92,7 +102,7 @@
           </div>
         </section>
 
-        <section class="panel controls">
+        <section id="limiterPanel" class="panel controls">
           <div class="panel-heading">
             <div>
               <p class="eyebrow">Policy</p>
@@ -119,15 +129,19 @@
             </div>
             <div id="windowRows"></div>
             <p id="windowEmpty" class="window-empty" hidden>No rate-limit rules. Requests bypass policy limits; queue and service limits can still return 503s.</p>
+            <div class="mini-chart">
+              <span id="limiterPreviewLabel">Sliding: 30 / 1s</span>
+              <canvas id="limiterPreview" width="220" height="56"></canvas>
+            </div>
           </div>
         </section>
 
-        <section class="panel controls">
+        <section id="backendPanel" class="panel controls">
           <div class="panel-heading">
             <div>
               <p class="eyebrow">Backend</p>
               <h2>Service Latency</h2>
-              <p class="panel-copy">Models how long accepted requests occupy backend capacity.</p>
+              <p class="panel-copy">Models app service time before a request tries the dependency.</p>
             </div>
           </div>
           <div class="grid">
@@ -142,6 +156,7 @@
             </label>
             <label><span id="latALabel">Mean latency</span>
               <input id="latA" type="number" step="1" value="800" />
+              <input id="latARange" class="range-input" type="range" min="50" max="2000" step="25" value="800" data-sync-target="latA" />
               <span id="latAHelp" class="field-unit">milliseconds</span>
             </label>
             <label><span id="latBLabel">Std deviation</span>
@@ -155,7 +170,55 @@
           </div>
         </section>
 
-        <section class="panel controls">
+        <section id="dependencyPanel" class="panel controls">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Dependency</p>
+              <h2>Downstream Service</h2>
+              <p class="panel-copy">Models the external dependency the app is trying to protect.</p>
+            </div>
+          </div>
+          <div class="grid">
+            <label><span>Dependency active capacity</span>
+              <input id="depMaxConcurrent" type="number" min="1" step="1" value="12" />
+              <input id="depMaxConcurrentRange" class="range-input" type="range" min="1" max="80" step="1" value="12" data-sync-target="depMaxConcurrent" />
+              <span class="field-unit">max active requests</span>
+            </label>
+            <label><span>Dependency pending capacity</span>
+              <input id="depQueueCapacity" type="number" min="0" step="1" value="600" />
+              <input id="depQueueCapacityRange" class="range-input" type="range" min="0" max="3000" step="25" value="600" data-sync-target="depQueueCapacity" />
+              <span class="field-unit">requests</span>
+            </label>
+            <label><span>Dependency wait timeout</span>
+              <input id="depMaxQueueWaitMs" type="number" min="0" step="10" value="1000" />
+              <span class="field-unit">How long a request may remain pending for downstream capacity before 503</span>
+            </label>
+            <label><span>Dependency distribution</span>
+              <select id="depLatencyDist">
+                <option value="constant">Constant</option>
+                <option value="uniform">Uniform</option>
+                <option value="normal" selected>Normal / Gaussian</option>
+                <option value="lognormal">Log-normal</option>
+                <option value="exponential">Exponential</option>
+              </select>
+            </label>
+            <label><span id="depLatALabel">Mean latency</span>
+              <input id="depLatA" type="number" step="1" value="180" />
+              <input id="depLatARange" class="range-input" type="range" min="20" max="1200" step="10" value="180" data-sync-target="depLatA" />
+              <span id="depLatAHelp" class="field-unit">milliseconds</span>
+            </label>
+            <label><span id="depLatBLabel">Std deviation</span>
+              <input id="depLatB" type="number" step="1" value="60" />
+              <span id="depLatBHelp" class="field-unit">milliseconds</span>
+            </label>
+            <div class="mini-chart">
+              <span id="depLatencyPreviewLabel">Normal / Gaussian</span>
+              <canvas id="depLatencyPreview" width="220" height="56"></canvas>
+            </div>
+          </div>
+        </section>
+
+        <section id="controlPlanePanel" class="panel controls">
           <div class="panel-heading">
             <div>
               <p class="eyebrow">Control plane</p>
@@ -206,7 +269,7 @@
             <div>
               <p class="eyebrow">Time series</p>
               <h2>Capacity, Admissions, and Rejections</h2>
-              <p class="panel-copy">429 means rate limited. 503 means backend queue full or timed out.</p>
+              <p class="panel-copy">429 means limiter reject. 503 means app or dependency capacity ran out.</p>
             </div>
           </div>
           <div id="seriesToggles" class="toggles"></div>
@@ -220,19 +283,27 @@
           <div class="panel-heading">
             <div>
               <p class="eyebrow">Distribution</p>
-              <h2>Latency Distribution</h2>
-              <p class="panel-copy">Observed served-request latency, bucketed in milliseconds.</p>
+              <h2>Latency Distribution by Status</h2>
+              <p class="panel-copy">Selectable latency distributions for HTTP 200, 429, 503, and overall.</p>
             </div>
           </div>
+          <div id="latencySeriesToggles" class="toggles"></div>
           <div class="chart-frame">
+            <div class="chart-status-label">Select HTTP 200, 429, 503, or overall distribution</div>
             <canvas id="latencyChart" width="1100" height="330"></canvas>
           </div>
+          <div id="latencyStats" class="dist-stats"></div>
         </section>
       </section>
     </div>
+
+    <footer class="page-footer">
+      <a class="about-link" href="https://amir-h-rassafi.github.io/" target="_blank" rel="noreferrer">About me</a>
+    </footer>
   </main>
   <script src="./simulation.js"></script>
   <script src="./charts.js"></script>
+  <script src="./overview.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

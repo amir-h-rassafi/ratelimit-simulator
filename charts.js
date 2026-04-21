@@ -197,7 +197,7 @@ function drawLatencyAxis(ctx, w, h, pad, bins, maxCount) {
   return maxY;
 }
 
-function drawLatencyHistogram(samples) {
+function drawLatencyHistogram(series) {
   const canvas = document.getElementById("latencyChart");
   const ctx = canvas.getContext("2d");
   const w = canvas.width;
@@ -206,31 +206,43 @@ function drawLatencyHistogram(samples) {
 
   ctx.clearRect(0, 0, w, h);
 
-  const { bins, max } = histogram(samples, 32);
-  const maxY = drawLatencyAxis(ctx, w, h, pad, bins, max);
-
-  if (!bins.length) return;
+  const activeSeries = (series || []).filter((s) => s && s.samples && s.samples.length);
+  const allSamples = activeSeries.flatMap((s) => s.samples).sort((a, b) => a - b);
+  const baseHist = histogram(allSamples, 32);
+  const maxY = drawLatencyAxis(ctx, w, h, pad, baseHist.bins, baseHist.max);
+  if (!baseHist.bins.length) return;
 
   const innerW = w - 2 * pad;
   const innerH = h - 2 * pad;
-  const barW = innerW / bins.length;
+  const min = baseHist.bins[0].from;
+  const max = baseHist.bins[baseHist.bins.length - 1].to;
+  const width = Math.max(1, (max - min) / 32);
+  const binW = innerW / 32;
+  const seriesCount = activeSeries.length;
 
-  const fill = ctx.createLinearGradient(0, pad, 0, h - pad);
-  fill.addColorStop(0, "#188038");
-  fill.addColorStop(1, "rgba(24, 128, 56, 0.16)");
-  ctx.fillStyle = fill;
-  bins.forEach((b, i) => {
-    const x = pad + i * barW + 2;
-    const bh = (b.count / maxY) * innerH;
-    const y = pad + innerH - bh;
-    const bw = Math.max(1, barW - 4);
-    if (ctx.roundRect) {
-      ctx.beginPath();
-      ctx.roundRect(x, y, bw, bh, 3);
-      ctx.fill();
-    } else {
-      ctx.fillRect(x, y, bw, bh);
+  activeSeries.forEach((s, sIdx) => {
+    const bins = Array.from({ length: 32 }, (_, i) => ({ from: min + i * width, to: min + (i + 1) * width, count: 0 }));
+    for (const value of s.samples) {
+      const idx = clamp(Math.floor((value - min) / width), 0, bins.length - 1);
+      bins[idx].count += 1;
     }
+    bins.forEach((b, i) => {
+      const subW = Math.max(2, (binW - 6) / Math.max(1, seriesCount));
+      const x = pad + i * binW + 3 + sIdx * subW;
+      const bh = b.count > 0 ? Math.max(1.5, (b.count / maxY) * innerH) : 0;
+      const y = pad + innerH - bh;
+      ctx.fillStyle = colorToRgba(s.color, s.key === "overall" ? 0.28 : 0.72);
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = s.key === "overall" ? 1.5 : 1;
+      if (ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(x, y, subW - 1, bh, 2);
+        ctx.fill();
+        if (s.key === "overall") ctx.stroke();
+      } else {
+        ctx.fillRect(x, y, subW - 1, bh);
+      }
+    });
   });
 }
 
@@ -320,6 +332,86 @@ function buildTrafficPreview(durationSec, rps, burstiness) {
 
 function trafficPreviewLabel(durationSec, rps, burstiness) {
   return `${Math.round(rps)} rps with ${Math.round(burstiness * 100)}% burst wave over ${Math.round(durationSec)}s`;
+}
+
+function buildLimiterPreview(windows) {
+  const rules = [...windows].sort((a, b) => a.windowMs - b.windowMs);
+  if (!rules.length) return [{ start: 0, end: 1, value: 0.12 }];
+  const rates = rules.map((w) => w.limit / Math.max(0.001, w.windowMs / 1000));
+  const maxRate = Math.max(1e-7, ...rates);
+  return rules.map((w, idx) => ({
+    start: idx / rules.length,
+    end: (idx + 1) / rules.length,
+    value: (w.limit / Math.max(0.001, w.windowMs / 1000)) / maxRate
+  }));
+}
+
+function drawLimiterWindowPreview(canvasId, windows, type, color = "#d93025") {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width;
+  const h = canvas.height;
+  const pad = 10;
+  const segments = buildLimiterPreview(windows);
+  const innerW = w - 2 * pad;
+  const innerH = h - 2 * pad;
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.strokeStyle = "#bdc1c6";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(pad, h - pad);
+  ctx.lineTo(w - pad, h - pad);
+  ctx.stroke();
+
+  segments.forEach((segment, idx) => {
+    const x = pad + segment.start * innerW;
+    const width = Math.max(2, (segment.end - segment.start) * innerW - 3);
+    const barH = Math.max(3, segment.value * innerH);
+    const y = pad + innerH - barH;
+    ctx.fillStyle = colorToRgba(color, type === "sliding" ? 0.32 : 0.68);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    if (type === "fixed") {
+      if (ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(x, y, width, barH, 2);
+        ctx.fill();
+      } else {
+        ctx.fillRect(x, y, width, barH);
+      }
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(x, h - pad);
+      ctx.lineTo(x, y + 4);
+      ctx.quadraticCurveTo(x + width * 0.5, y - 2, x + width, y + 4);
+      ctx.lineTo(x + width, h - pad);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(x, y + 4);
+      ctx.quadraticCurveTo(x + width * 0.5, y - 2, x + width, y + 4);
+      ctx.stroke();
+    }
+    if (idx < segments.length - 1) {
+      const splitX = pad + segment.end * innerW;
+      ctx.strokeStyle = "#e5e8eb";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(splitX, pad + 2);
+      ctx.lineTo(splitX, h - pad);
+      ctx.stroke();
+    }
+  });
+}
+
+function limiterPreviewLabel(windows, type) {
+  if (!windows.length) return "No rules configured";
+  const rules = [...windows].sort((a, b) => a.windowMs - b.windowMs).slice(0, 3);
+  const summary = rules.map((w) => `${Math.round(w.limit)} / ${Math.round(w.windowMs / 1000)}s`).join(" • ");
+  const label = type === "sliding" ? "Sliding" : "Fixed";
+  return `${label}: ${summary}`;
 }
 
 function distributionLabel(dist, a, b) {
