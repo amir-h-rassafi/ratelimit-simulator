@@ -7,7 +7,12 @@ const {
   simulateScenario
 } = require("./review.js");
 
-const PROTOCOL_VERSION = "2024-11-05";
+const SUPPORTED_PROTOCOL_VERSIONS = [
+  "2025-11-25",
+  "2025-06-18",
+  "2025-03-26",
+  "2024-11-05"
+];
 
 // MCP stdio transport is newline-delimited JSON-RPC (NDJSON),
 // not LSP-style Content-Length framing.
@@ -98,8 +103,12 @@ function handleRequest(message) {
   const { id, method, params } = message;
 
   if (method === "initialize") {
+    const requestedVersion = params?.protocolVersion;
+    const protocolVersion = SUPPORTED_PROTOCOL_VERSIONS.includes(requestedVersion)
+      ? requestedVersion
+      : SUPPORTED_PROTOCOL_VERSIONS[0];
     return reply(id, {
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion,
       capabilities: { tools: {} },
       serverInfo: { name: "rate-limit-simulator-mcp", version: "0.1.0" }
     });

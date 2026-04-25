@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "scripts": {
     "test": "node tests/simulation.test.js && node tests/mcp.review.test.js && node tests/mcp.server.test.js",
-    "mcp": "node mcp/server.js"
+    "mcp": "node mcp/server.js",
+    "benchmark": "node scripts/benchmark.js"
   }
 }

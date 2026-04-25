@@ -54,6 +54,12 @@ The MCP returns those assumptions so the agent can review them instead of hiding
 
 The simplest interface for an agent is `review_component_path`.
 
+The repo includes a complete newline-delimited JSON-RPC sample at:
+
+```bash
+examples/mcp-review-component-path.ndjson
+```
+
 Example input:
 
 ```json
@@ -108,6 +114,26 @@ Add this MCP server as a local stdio server:
 ```
 
 Set the working directory to this repo so the relative path resolves correctly.
+
+### Sanity checks and benchmark
+
+Run the local tests:
+
+```bash
+npm test
+```
+
+Run a dependency-free benchmark:
+
+```bash
+npm run benchmark
+```
+
+Use fewer or more iterations with:
+
+```bash
+BENCH_ITERATIONS=250 npm run benchmark
+```
 
 ## Run locally
 
