@@ -180,7 +180,7 @@
               </select>
               <span class="field-unit">How requests are counted inside each window</span>
             </label>
-            <label><span>Decision distribution</span>
+            <label class="distribution-field"><span>Decision distribution</span>
               <select id="rlLatencyDist">
                 <option value="constant">Constant</option>
                 <option value="uniform">Uniform</option>
@@ -265,7 +265,7 @@
               <input id="maxQueueWaitMsRange" class="range-input" type="range" min="0" max="10000" step="50" value="1500" data-sync-target="maxQueueWaitMs" />
               <span class="field-unit">timeout while waiting for app capacity</span>
             </label>
-            <label><span>Distribution</span>
+            <label class="distribution-field"><span>Distribution</span>
               <select id="latencyDist">
                 <option value="constant">Constant</option>
                 <option value="uniform">Uniform</option>
@@ -304,7 +304,7 @@
               <input id="depMaxConcurrentRange" class="range-input" type="range" min="1" max="80" step="1" value="12" data-sync-target="depMaxConcurrent" />
               <span class="field-unit">max active requests</span>
             </label>
-            <label><span>Dependency distribution</span>
+            <label class="distribution-field"><span>Dependency distribution</span>
               <select id="depLatencyDist">
                 <option value="constant">Constant</option>
                 <option value="uniform">Uniform</option>
