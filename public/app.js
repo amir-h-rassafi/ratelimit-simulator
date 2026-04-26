@@ -68,7 +68,7 @@ function updateDistributionPreviews() {
 
 const COOKIE_NAME = "rl_sim_state";
 const COOKIE_TTL_SEC = 60 * 60 * 24 * 180;
-const UI_STATE_VERSION = 14;
+const UI_STATE_VERSION = 16;
 const PANEL_STATE_STORAGE_KEY = "rl_sim_collapsed_panels";
 const CONTROL_IDS = [
   "durationSec",
@@ -76,19 +76,25 @@ const CONTROL_IDS = [
   "rps",
   "burstiness",
   "trafficNoise",
+  "wsMaxConcurrent",
+  "wsQueueCapacity",
+  "wsMaxQueueWaitMs",
+  "wsRequestTimeoutMs",
   "maxConcurrent",
   "queueCapacity",
   "maxQueueWaitMs",
   "limiterType",
+  "rlFailureMode",
   "latencyDist",
   "latA",
   "latB",
   "rlLatencyDist",
   "rlLatA",
   "rlLatB",
+  "rlMaxConcurrent",
+  "rlQueueCapacity",
+  "rlMaxQueueWaitMs",
   "depMaxConcurrent",
-  "depQueueCapacity",
-  "depMaxQueueWaitMs",
   "depLatencyDist",
   "depLatA",
   "depLatB"
@@ -264,12 +270,14 @@ function buildMergedSeries(result) {
     { key: "r429", label: "429/s", color: "#d93025", values: result.timeline.map((p) => p.r429PerSec), emphasis: true, fill: true },
     { key: "r503", label: "503/s", color: "#a142f4", values: result.timeline.map((p) => p.r503PerSec), emphasis: true },
     { key: "queue", label: "App Pending", color: "#b06000", values: result.timeline.map((p) => p.queued) },
-    { key: "depQueued", label: "Dependency Pending", color: "#7b1fa2", values: result.timeline.map((p) => p.depQueued) },
+    { key: "wsActive", label: "Webserver Active", color: "#006d75", values: result.timeline.map((p) => p.wsActive ?? 0) },
+    { key: "wsPending", label: "Webserver Pending", color: "#4f8f94", values: result.timeline.map((p) => p.wsQueued ?? 0) },
     { key: "active", label: "App Active", color: "#1a73e8", values: result.timeline.map((p) => p.active) },
     { key: "depActive", label: "Dependency Active", color: "#5e35b1", values: result.timeline.map((p) => p.depActive) },
     { key: "arrivals", label: "Incoming Traffic/s", color: "#3c4043", values: result.timeline.map((p) => p.arrivalsPerSec), emphasis: true },
     { key: "expectedTraffic", label: "Expected Traffic/s", color: "#9aa0a6", values: result.timeline.map((p) => p.expectedArrivalsPerSec ?? p.arrivalsPerSec) },
-    { key: "rlPending", label: "Limiter Queue", color: "#59636e", values: result.timeline.map((p) => p.limiterPending) }
+    { key: "rlActive", label: "Limiter Active", color: "#59636e", values: result.timeline.map((p) => p.limiterActive ?? 0) },
+    { key: "rlPending", label: "Limiter Pending", color: "#7b858f", values: result.timeline.map((p) => p.limiterPending) }
   ];
   const windows = result.windowSeries.map((w, i) => ({
     key: `window_${i}`,
@@ -348,10 +356,10 @@ function updateLatencyChart(result) {
 
 const DEFAULT_COLLAPSED_PANELS = {
   trafficPanel: true,
+  webserverPanel: true,
   limiterPanel: true,
   backendPanel: true,
-  dependencyPanel: true,
-  controlPlanePanel: true
+  dependencyPanel: true
 };
 
 function applyCollapsedPanels() {
@@ -470,12 +478,12 @@ function markResultsCurrent() {
 }
 
 function scrollToResults() {
-  document.getElementById("mainChartPanel")?.scrollIntoView({
+  document.getElementById("pressureMapPanel")?.scrollIntoView({
     behavior: "smooth",
     block: "start"
   });
   window.setTimeout(() => {
-    document.getElementById("mergedChart")?.focus({ preventScroll: true });
+    document.getElementById("pressureMapPanel")?.focus({ preventScroll: true });
   }, 350);
 }
 
@@ -626,20 +634,26 @@ function readConfig() {
     rps: clamp(getNum("rps"), 0, 200000),
     burstiness: clamp(getNum("burstiness"), 0, 1),
     trafficNoise: document.getElementById("trafficNoise").checked,
+    wsMaxConcurrent: clamp(getNum("wsMaxConcurrent"), 1, 1000000),
+    wsQueueCapacity: clamp(getNum("wsQueueCapacity"), 0, 1000000),
+    wsMaxQueueWaitMs: clamp(getNum("wsMaxQueueWaitMs"), 0, 600000),
+    wsRequestTimeoutMs: clamp(getNum("wsRequestTimeoutMs"), 1, 600000),
     maxConcurrent: clamp(getNum("maxConcurrent"), 1, 100000),
     queueCapacity: clamp(getNum("queueCapacity"), 0, 1000000),
     maxQueueWaitMs: clamp(getNum("maxQueueWaitMs"), 0, 600000),
     limiterType: document.getElementById("limiterType").value,
     windows: readWindows(),
+    rlFailureMode: document.getElementById("rlFailureMode").value,
     rlLatencyDist: document.getElementById("rlLatencyDist").value,
     rlLatA: getNum("rlLatA"),
     rlLatB: getNum("rlLatB"),
+    rlMaxConcurrent: clamp(getNum("rlMaxConcurrent"), 1, 1000000),
+    rlQueueCapacity: clamp(getNum("rlQueueCapacity"), 0, 1000000),
+    rlMaxQueueWaitMs: clamp(getNum("rlMaxQueueWaitMs"), 0, 600000),
     latencyDist: document.getElementById("latencyDist").value,
     latA: getNum("latA"),
     latB: getNum("latB"),
     depMaxConcurrent: clamp(getNum("depMaxConcurrent"), 1, 100000),
-    depQueueCapacity: clamp(getNum("depQueueCapacity"), 0, 1000000),
-    depMaxQueueWaitMs: clamp(getNum("depMaxQueueWaitMs"), 0, 600000),
     depLatencyDist: document.getElementById("depLatencyDist").value,
     depLatA: getNum("depLatA"),
     depLatB: getNum("depLatB")
@@ -651,6 +665,7 @@ function runAndRender(options = {}) {
   const result = runSimulation(cfg);
   const baseline = runSimulation({ ...cfg, windows: [] });
   renderKpis(result, baseline);
+  renderPressureMap(result, baseline, cfg);
   updateDistributionPreviews();
 
   const merged = buildMergedSeries(result);

@@ -27,8 +27,6 @@ function run(overrides = {}) {
     latA: 10,
     latB: 0,
     depMaxConcurrent: 100,
-    depQueueCapacity: 1000,
-    depMaxQueueWaitMs: 5000,
     depLatencyDist: "constant",
     depLatA: 10,
     depLatB: 0,
@@ -108,8 +106,6 @@ function assertNoNaN(result) {
     latencyDist: "constant",
     latA: 40,
     depMaxConcurrent: 2,
-    depQueueCapacity: 10,
-    depMaxQueueWaitMs: 100,
     depLatencyDist: "constant",
     depLatA: 300
   });
@@ -122,14 +118,12 @@ function assertNoNaN(result) {
     latencyDist: "constant",
     latA: 40,
     depMaxConcurrent: 2,
-    depQueueCapacity: 10,
-    depMaxQueueWaitMs: 100,
     depLatencyDist: "constant",
     depLatA: 300
   });
   assert(protectedFlow.totals.rate429 > 0, "limiter should actively reject in the protected scenario");
   assert(protectedFlow.totals.rate503 < openLoop.totals.rate503, "limiter should reduce downstream 503s");
-  assert(protectedFlow.queues.peakDepQueue <= openLoop.queues.peakDepQueue, "limiter should not worsen dependency queue pressure");
+  assert(protectedFlow.queues.peakDepInflight <= openLoop.queues.peakDepInflight, "limiter should not worsen dependency active pressure");
   assertNoNaN(protectedFlow);
   assertLatencyAccounting(protectedFlow);
   assertLatencyAccounting(openLoop);
@@ -202,7 +196,6 @@ function assertNoNaN(result) {
     latencyDist: "constant",
     latA: 1,
     depMaxConcurrent: 1000,
-    depQueueCapacity: 1000,
     depLatencyDist: "constant",
     depLatA: 1,
     depLatB: 0
@@ -253,8 +246,6 @@ function assertNoNaN(result) {
     latencyDist: "constant",
     latA: 1,
     depMaxConcurrent: 1000,
-    depQueueCapacity: 0,
-    depMaxQueueWaitMs: 1,
     depLatencyDist: "constant",
     depLatA: 1
   });
@@ -282,14 +273,81 @@ function assertNoNaN(result) {
   assert(result.totals.depDroppedFull >= 0, "per-stage dep drop-full counter must exist");
   assert.strictEqual(
     result.totals.droppedFull,
-    result.totals.appDroppedFull + result.totals.depDroppedFull,
-    "droppedFull alias must equal app+dep drop-full sum"
+    result.totals.wsDroppedFull + result.totals.limiterDroppedFull + result.totals.appDroppedFull + result.totals.depDroppedFull,
+    "droppedFull alias must equal webserver+limiter+app+dep drop-full sum"
   );
   assert.strictEqual(
     result.totals.droppedWait,
-    result.totals.appDroppedWait + result.totals.depDroppedWait,
-    "droppedWait alias must equal app+dep drop-wait sum"
+    result.totals.wsDroppedWait + result.totals.limiterDroppedWait + result.totals.appDroppedWait + result.totals.depDroppedWait,
+    "droppedWait alias must equal webserver+limiter+app+dep drop-wait sum"
   );
+}
+
+{
+  const result = run({
+    durationSec: 2,
+    rps: 10,
+    windows: [{ windowMs: 1000, limit: 1000 }],
+    wsRequestTimeoutMs: 100,
+    rlLatencyDist: "constant",
+    rlLatA: 500,
+    maxConcurrent: 1000,
+    queueCapacity: 1000,
+    latencyDist: "constant",
+    latA: 1,
+    depMaxConcurrent: 1000,
+    depLatencyDist: "constant",
+    depLatA: 1
+  });
+  assert(result.totals.wsDroppedTimeout > 0, "slow downstream path should surface as webserver-owned timeout 503");
+  assert.strictEqual(result.totals.appDroppedFull + result.totals.depDroppedFull, 0, "webserver timeout should not be attributed to app/dependency capacity");
+  assertLatencyAccounting(result);
+}
+
+{
+  const closed = run({
+    durationSec: 2,
+    rps: 100,
+    windows: [{ windowMs: 1000, limit: 1000 }],
+    rlMaxConcurrent: 1,
+    rlQueueCapacity: 0,
+    rlFailureMode: "fail_closed",
+    rlLatencyDist: "constant",
+    rlLatA: 500,
+    wsRequestTimeoutMs: 5000,
+    maxConcurrent: 1000,
+    queueCapacity: 1000,
+    latencyDist: "constant",
+    latA: 1,
+    depMaxConcurrent: 1000,
+    depLatencyDist: "constant",
+    depLatA: 1
+  });
+  const bypass = run({
+    durationSec: 2,
+    rps: 100,
+    windows: [{ windowMs: 1000, limit: 1000 }],
+    rlMaxConcurrent: 1,
+    rlQueueCapacity: 0,
+    rlFailureMode: "bypass",
+    rlLatencyDist: "constant",
+    rlLatA: 500,
+    wsRequestTimeoutMs: 5000,
+    maxConcurrent: 1000,
+    queueCapacity: 1000,
+    latencyDist: "constant",
+    latA: 1,
+    depMaxConcurrent: 1000,
+    depLatencyDist: "constant",
+    depLatA: 1
+  });
+  assert(closed.totals.limiterDroppedFull > 0, "fail-closed limiter capacity pressure should return limiter 503");
+  assert.strictEqual(closed.totals.limiterBypassed, 0, "fail-closed mode must not bypass the limiter");
+  assert(bypass.totals.limiterBypassed > 0, "bypass mode should send limiter-capacity failures to the app path");
+  assert.strictEqual(bypass.totals.limiterDroppedFull, 0, "bypass mode should not count limiter queue-full as limiter 503");
+  assert(bypass.totals.served > closed.totals.served, "bypass mode should preserve more traffic when backend capacity is ample");
+  assertLatencyAccounting(closed);
+  assertLatencyAccounting(bypass);
 }
 
 console.log("simulation sanity tests passed");

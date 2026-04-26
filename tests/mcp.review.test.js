@@ -30,7 +30,7 @@ const {
 
 {
   const shared = {
-    rps: 120, depMaxConcurrent: 2, depQueueCapacity: 10, depMaxQueueWaitMs: 100,
+    rps: 120, depMaxConcurrent: 2,
     depLatA: 300, depLatB: 0, depLatencyDist: "constant",
     latencyDist: "constant", latA: 40, latB: 0
   };

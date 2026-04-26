@@ -41,8 +41,6 @@ const stressConfig = {
   latA: 70,
   latB: 20,
   depMaxConcurrent: 8,
-  depQueueCapacity: 80,
-  depMaxQueueWaitMs: 400,
   depLatencyDist: "normal",
   depLatA: 180,
   depLatB: 45

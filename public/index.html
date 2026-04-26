@@ -50,7 +50,7 @@
       <div class="hero">
         <p class="eyebrow">Simulator</p>
         <h1>Rate Limiter Simulator</h1>
-        <p>Traffic flows through a fast limiter, modeled app pending requests, and a downstream dependency. The simulator shows where pressure accumulates, which timeout contract fails, and how much the limiter protects the system.</p>
+        <p>Traffic flows through a high-capacity webserver, a rate-limiter decision path, modeled app pending requests, and a downstream dependency. The simulator shows where pressure accumulates, which timeout contract fails, and how much the limiter protects the system.</p>
       </div>
       <div class="header-actions">
         <button id="runBtn" class="run-button" type="button">
@@ -71,20 +71,24 @@
         <span>Generate arrivals with RPS and burst shape.</span>
       </div>
       <div>
-        <strong>2. Limiter queue</strong>
-        <span>Every arrival waits for a fast allow or reject decision.</span>
+        <strong>2. Webserver</strong>
+        <span>The front door owns the end-to-end request deadline.</span>
       </div>
       <div>
-        <strong>3. Policy</strong>
+        <strong>3. Limiter queue</strong>
+        <span>Every admitted request waits for an allow or reject decision.</span>
+      </div>
+      <div>
+        <strong>4. Policy</strong>
         <span>Rules produce 429 and keep later queues under control.</span>
       </div>
       <div>
-        <strong>4. App pending</strong>
+        <strong>5. App pending</strong>
         <span>When app capacity is full, requests remain pending until capacity opens or timeout expires.</span>
       </div>
       <div>
-        <strong>5. Dependency pending</strong>
-        <span>Downstream saturation creates its own pending state, deadline, and 503.</span>
+        <strong>6. Dependency capacity</strong>
+        <span>Downstream active capacity and latency can still push the webserver deadline over the edge.</span>
       </div>
     </section>
 
@@ -121,26 +125,42 @@
               <span class="checkbox-row"><input id="trafficNoise" type="checkbox" /> <span>Sample arrivals with random noise around the expected traffic shape</span></span>
               <span class="field-unit">Off by default. When disabled, arrivals follow the expected shape deterministically.</span>
             </label>
-            <label><span>App active capacity</span>
-              <input id="maxConcurrent" type="number" min="1" step="1" value="24" />
-              <input id="maxConcurrentRange" class="range-input" type="range" min="1" max="120" step="1" value="24" data-sync-target="maxConcurrent" />
-              <span class="field-unit">max active requests</span>
-            </label>
-            <label><span>App pending capacity</span>
-              <input id="queueCapacity" type="number" min="0" step="1" value="3000" />
-              <input id="queueCapacityRange" class="range-input" type="range" min="0" max="6000" step="50" value="3000" data-sync-target="queueCapacity" />
-              <span class="field-unit">requests</span>
-              <span class="field-unit">Requests the model allows to remain pending before app timeout</span>
-            </label>
-            <label><span>App pending timeout</span>
-              <input id="maxQueueWaitMs" type="number" min="0" step="10" value="1500" />
-              <input id="maxQueueWaitMsRange" class="range-input" type="range" min="0" max="10000" step="50" value="1500" data-sync-target="maxQueueWaitMs" />
-              <span class="field-unit">How long a request may remain pending before the app path returns 503</span>
-            </label>
             <div class="mini-chart">
               <span id="trafficPreviewLabel">Expected offered traffic: 40 rps baseline with a 40% burst wave over 15s</span>
               <canvas id="trafficPreview" width="220" height="56"></canvas>
             </div>
+          </div>
+        </section>
+
+        <section id="webserverPanel" class="panel controls">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Front door</p>
+              <h2>Webserver</h2>
+              <p class="panel-copy">Models the high-performance request owner before the limiter. By default it is generous; the important contract is the end-to-end timeout it applies while downstream stages work.</p>
+            </div>
+          </div>
+          <div class="grid">
+            <label><span>Webserver active capacity</span>
+              <input id="wsMaxConcurrent" type="number" min="1" step="1" value="1000" />
+              <input id="wsMaxConcurrentRange" class="range-input" type="range" min="1" max="5000" step="10" value="1000" data-sync-target="wsMaxConcurrent" />
+              <span class="field-unit">open client requests</span>
+            </label>
+            <label><span>Webserver pending capacity</span>
+              <input id="wsQueueCapacity" type="number" min="0" step="1" value="5000" />
+              <input id="wsQueueCapacityRange" class="range-input" type="range" min="0" max="20000" step="50" value="5000" data-sync-target="wsQueueCapacity" />
+              <span class="field-unit">requests waiting for a webserver slot</span>
+            </label>
+            <label><span>Webserver pending timeout</span>
+              <input id="wsMaxQueueWaitMs" type="number" min="0" step="10" value="1000" />
+              <input id="wsMaxQueueWaitMsRange" class="range-input" type="range" min="0" max="10000" step="50" value="1000" data-sync-target="wsMaxQueueWaitMs" />
+              <span class="field-unit">timeout before the request enters the limiter path</span>
+            </label>
+            <label><span>End-to-end request timeout</span>
+              <input id="wsRequestTimeoutMs" type="number" min="1" step="10" value="5000" />
+              <input id="wsRequestTimeoutMsRange" class="range-input" type="range" min="100" max="30000" step="100" value="5000" data-sync-target="wsRequestTimeoutMs" />
+              <span class="field-unit">webserver returns 503 if the downstream path takes longer</span>
+            </label>
           </div>
         </section>
 
@@ -149,10 +169,10 @@
             <div>
               <p class="eyebrow">Policy</p>
               <h2>Rate Limiter</h2>
-              <p class="panel-copy">Rules are evaluated in order. A request rejected by any rule becomes a 429.</p>
+              <p class="panel-copy">Rules, decision latency, limiter capacity, and limiter failure behavior before app admission.</p>
             </div>
           </div>
-          <div class="grid compact-grid">
+          <div class="grid">
             <label><span>Window algorithm</span>
               <select id="limiterType">
                 <option value="fixed">Fixed window counter</option>
@@ -160,6 +180,49 @@
               </select>
               <span class="field-unit">How requests are counted inside each window</span>
             </label>
+            <label><span>Decision distribution</span>
+              <select id="rlLatencyDist">
+                <option value="constant">Constant</option>
+                <option value="uniform">Uniform</option>
+                <option value="normal">Normal</option>
+                <option value="lognormal">Log-normal</option>
+                <option value="exponential">Exponential</option>
+              </select>
+            </label>
+            <label><span>Limiter failure mode</span>
+              <select id="rlFailureMode">
+                <option value="fail_closed" selected>Fail request with 503</option>
+                <option value="bypass">Bypass limiter to app</option>
+              </select>
+              <span class="field-unit">Used when limiter capacity is full or its pending timeout expires</span>
+            </label>
+            <label><span id="rlLatALabel">Decision latency</span>
+              <input id="rlLatA" type="number" step="1" value="8" />
+              <span id="rlLatAHelp" class="field-unit">milliseconds</span>
+            </label>
+            <label><span id="rlLatBLabel">Unused</span>
+              <input id="rlLatB" type="number" step="1" value="4" />
+              <span id="rlLatBHelp" class="field-unit">ignored for constant/exponential</span>
+            </label>
+            <label><span>Limiter active capacity</span>
+              <input id="rlMaxConcurrent" type="number" min="1" step="1" value="1000" />
+              <input id="rlMaxConcurrentRange" class="range-input" type="range" min="1" max="5000" step="10" value="1000" data-sync-target="rlMaxConcurrent" />
+              <span class="field-unit">concurrent limiter decisions</span>
+            </label>
+            <label><span>Limiter pending capacity</span>
+              <input id="rlQueueCapacity" type="number" min="0" step="1" value="5000" />
+              <input id="rlQueueCapacityRange" class="range-input" type="range" min="0" max="20000" step="50" value="5000" data-sync-target="rlQueueCapacity" />
+              <span class="field-unit">requests waiting for a limiter slot</span>
+            </label>
+            <label><span>Limiter pending timeout</span>
+              <input id="rlMaxQueueWaitMs" type="number" min="0" step="10" value="1000" />
+              <input id="rlMaxQueueWaitMsRange" class="range-input" type="range" min="0" max="10000" step="50" value="1000" data-sync-target="rlMaxQueueWaitMs" />
+              <span class="field-unit">timeout returns 503 before policy decision</span>
+            </label>
+            <div class="mini-chart">
+              <span id="rlLatencyPreviewLabel">Constant</span>
+              <canvas id="rlLatencyPreview" width="220" height="56"></canvas>
+            </div>
           </div>
           <div class="window-stack">
             <div class="window-head">
@@ -170,43 +233,10 @@
               <button id="addWindowBtn" type="button">Add rule</button>
             </div>
             <div id="windowRows"></div>
-            <p id="windowEmpty" class="window-empty" hidden>No rate-limit rules. Requests bypass policy limits; queue and service limits can still return 503s.</p>
+            <p id="windowEmpty" class="window-empty" hidden>No rate-limit rules. Requests bypass policy limits; capacity and timeout limits can still return 503s.</p>
             <div class="mini-chart">
               <span id="limiterPreviewLabel">Sliding: 30 / 1s</span>
               <canvas id="limiterPreview" width="220" height="56"></canvas>
-            </div>
-          </div>
-        </section>
-
-        <section id="controlPlanePanel" class="panel controls">
-          <div class="panel-heading">
-            <div>
-              <p class="eyebrow">Control plane</p>
-              <h2>Rate-Limiter Latency</h2>
-              <p class="panel-copy">Models time spent deciding allow or reject before backend admission.</p>
-            </div>
-          </div>
-          <div class="grid">
-            <label><span>Decision distribution</span>
-              <select id="rlLatencyDist">
-                <option value="constant">Constant</option>
-                <option value="uniform">Uniform</option>
-                <option value="normal">Normal</option>
-                <option value="lognormal">Log-normal</option>
-                <option value="exponential">Exponential</option>
-              </select>
-            </label>
-            <label><span id="rlLatALabel">Decision latency</span>
-              <input id="rlLatA" type="number" step="1" value="8" />
-              <span id="rlLatAHelp" class="field-unit">milliseconds</span>
-            </label>
-            <label><span id="rlLatBLabel">Unused</span>
-              <input id="rlLatB" type="number" step="1" value="4" />
-              <span id="rlLatBHelp" class="field-unit">ignored for constant/exponential</span>
-            </label>
-            <div class="mini-chart">
-              <span id="rlLatencyPreviewLabel">Constant</span>
-              <canvas id="rlLatencyPreview" width="220" height="56"></canvas>
             </div>
           </div>
         </section>
@@ -215,11 +245,26 @@
           <div class="panel-heading">
             <div>
               <p class="eyebrow">Backend</p>
-              <h2>Service Latency</h2>
-              <p class="panel-copy">Models app service time before a request tries the dependency.</p>
+              <h2>Service</h2>
+              <p class="panel-copy">Models app capacity, app pending behavior, and app service time before a request tries the dependency.</p>
             </div>
           </div>
           <div class="grid">
+            <label><span>App active capacity</span>
+              <input id="maxConcurrent" type="number" min="1" step="1" value="24" />
+              <input id="maxConcurrentRange" class="range-input" type="range" min="1" max="120" step="1" value="24" data-sync-target="maxConcurrent" />
+              <span class="field-unit">max active requests</span>
+            </label>
+            <label><span>App pending capacity</span>
+              <input id="queueCapacity" type="number" min="0" step="1" value="3000" />
+              <input id="queueCapacityRange" class="range-input" type="range" min="0" max="6000" step="50" value="3000" data-sync-target="queueCapacity" />
+              <span class="field-unit">requests allowed to wait for app capacity</span>
+            </label>
+            <label><span>App pending timeout</span>
+              <input id="maxQueueWaitMs" type="number" min="0" step="10" value="1500" />
+              <input id="maxQueueWaitMsRange" class="range-input" type="range" min="0" max="10000" step="50" value="1500" data-sync-target="maxQueueWaitMs" />
+              <span class="field-unit">timeout while waiting for app capacity</span>
+            </label>
             <label><span>Distribution</span>
               <select id="latencyDist">
                 <option value="constant">Constant</option>
@@ -249,7 +294,7 @@
           <div class="panel-heading">
             <div>
               <p class="eyebrow">Dependency</p>
-              <h2>Downstream Service</h2>
+              <h2>Downstream</h2>
               <p class="panel-copy">Models the external dependency the app is trying to protect.</p>
             </div>
           </div>
@@ -258,15 +303,6 @@
               <input id="depMaxConcurrent" type="number" min="1" step="1" value="12" />
               <input id="depMaxConcurrentRange" class="range-input" type="range" min="1" max="80" step="1" value="12" data-sync-target="depMaxConcurrent" />
               <span class="field-unit">max active requests</span>
-            </label>
-            <label><span>Dependency pending capacity</span>
-              <input id="depQueueCapacity" type="number" min="0" step="1" value="600" />
-              <input id="depQueueCapacityRange" class="range-input" type="range" min="0" max="3000" step="25" value="600" data-sync-target="depQueueCapacity" />
-              <span class="field-unit">requests</span>
-            </label>
-            <label><span>Dependency wait timeout</span>
-              <input id="depMaxQueueWaitMs" type="number" min="0" step="10" value="1000" />
-              <span class="field-unit">How long a request may remain pending for downstream capacity before 503</span>
             </label>
             <label><span>Dependency distribution</span>
               <select id="depLatencyDist">
@@ -296,6 +332,17 @@
       </aside>
 
       <section class="content">
+        <section id="pressureMapPanel" class="panel pressure-panel" tabindex="-1">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Topology</p>
+              <h2>System Pressure Map</h2>
+              <p class="panel-copy">Current placement: traffic enters the webserver first; the limiter sits before app capacity.</p>
+            </div>
+          </div>
+          <div id="pressureMap" class="pressure-map" aria-live="polite"></div>
+        </section>
+
         <section id="resultPanel" class="panel metrics">
           <div class="panel-heading">
             <div>
@@ -312,7 +359,7 @@
             <div>
               <p class="eyebrow">Time series</p>
               <h2>Capacity, Admissions, and Rejections</h2>
-              <p class="panel-copy">Incoming Traffic/s shows what is actually fed into the limiter. Expected Traffic/s is the configured offered shape. 429 means limiter reject. 503 means app or dependency capacity ran out.</p>
+              <p class="panel-copy">Incoming Traffic/s shows offered load. Expected Traffic/s is the configured shape. 429 means limiter reject. 503 can come from webserver timeout, limiter capacity, app capacity, or dependency capacity.</p>
             </div>
           </div>
           <div id="seriesToggles" class="toggles"></div>
@@ -349,7 +396,7 @@
         </div>
       </div>
       <div class="seo-copy-body">
-        <p>This rate limiter simulator models how incoming traffic moves through a fast rate-limiter decision path, app pending capacity, and a downstream dependency. It is designed to make HTTP 429 rate-limit rejects, HTTP 503 capacity failures, queue buildup, pending requests, latency distribution, and bottleneck behavior easier to understand in a distributed system.</p>
+        <p>This rate limiter simulator models how incoming traffic moves through a high-capacity webserver, a rate-limiter decision path, app pending capacity, and a downstream dependency. It is designed to make HTTP 429 rate-limit rejects, HTTP 503 capacity failures, queue buildup, pending requests, latency distribution, and bottleneck behavior easier to understand in a distributed system.</p>
         <p>The simulator supports fixed-window and sliding-window thinking for policy behavior, and it highlights how limiter rules protect backend capacity by reducing overload before app timeouts and downstream saturation create visible failures.</p>
       </div>
     </section>

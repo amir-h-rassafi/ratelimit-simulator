@@ -119,11 +119,19 @@ function makeWindowSeries(windows) {
 function runSimulation(cfg) {
   const {
     durationSec, stepMs, rps, burstiness, trafficNoise = false,
+    wsMaxConcurrent = Number.POSITIVE_INFINITY,
+    wsQueueCapacity = Number.POSITIVE_INFINITY,
+    wsMaxQueueWaitMs = Number.POSITIVE_INFINITY,
+    wsRequestTimeoutMs = Number.POSITIVE_INFINITY,
     maxConcurrent, queueCapacity, maxQueueWaitMs,
     limiterType, windows,
+    rlFailureMode = "fail_closed",
     rlLatencyDist, rlLatA, rlLatB,
+    rlMaxConcurrent = Number.POSITIVE_INFINITY,
+    rlQueueCapacity = Number.POSITIVE_INFINITY,
+    rlMaxQueueWaitMs = Number.POSITIVE_INFINITY,
     latencyDist, latA, latB,
-    depMaxConcurrent, depQueueCapacity, depMaxQueueWaitMs,
+    depMaxConcurrent,
     depLatencyDist, depLatA, depLatB
   } = cfg;
 
@@ -134,23 +142,103 @@ function runSimulation(cfg) {
   const appInflight = [];
   const appQueue = [];
   const depInflight = [];
-  const depQueue = [];
-  const limiterPending = [];
+  const wsActive = [];
+  const wsQueue = [];
+  const limiterInflight = [];
+  const limiterQueue = [];
   const limiterLatencies = [];
   const latencyByStatus = { s200: [], s429: [], s503: [] };
   const timeline = [];
 
   const totals = {
-    arrived: 0, enteredApp: 0, enteredDependency: 0, served: 0, delayedServed: 0,
+    arrived: 0, enteredWebserver: 0, enteredLimiter: 0, enteredApp: 0, enteredDependency: 0, served: 0, delayedServed: 0,
     rate429: 0, rate503: 0,
+    wsDroppedFull: 0, wsDroppedWait: 0, wsDroppedTimeout: 0,
+    limiterDroppedFull: 0, limiterDroppedWait: 0, limiterBypassed: 0,
     appDroppedFull: 0, appDroppedWait: 0,
     depDroppedFull: 0, depDroppedWait: 0
   };
-  const peaks = { limiterPending: 0, appQueue: 0, depQueue: 0, appInflight: 0, depInflight: 0 };
+  const peaks = {
+    wsQueue: 0, wsActive: 0,
+    limiterPending: 0, limiterQueue: 0, limiterInflight: 0,
+    appQueue: 0, appInflight: 0, depInflight: 0
+  };
 
   let sumLatency = 0;
   let sumQueueDelay = 0;
   let trafficArrivalAccumulator = 0;
+  let nextReqId = 1;
+
+  function completeWebserver(req) {
+    if (!req || req.id == null) return false;
+    const idx = wsActive.findIndex((active) => active.id === req.id);
+    if (idx < 0) return false;
+    wsActive.splice(idx, 1);
+    return true;
+  }
+
+  function removeById(items, id) {
+    const idx = items.findIndex((item) => item.id === id);
+    if (idx >= 0) items.splice(idx, 1);
+  }
+
+  function removeDownstreamWork(id) {
+    removeById(limiterQueue, id);
+    removeById(limiterInflight, id);
+    removeById(appQueue, id);
+    removeById(appInflight, id);
+    removeById(depInflight, id);
+  }
+
+  function record503(req, latencyMs) {
+    totals.rate503 += 1;
+    latencyByStatus.s503.push(Math.max(0, latencyMs));
+  }
+
+  function recordWebserverTimeout(req) {
+    if (!completeWebserver(req)) return false;
+    removeDownstreamWork(req.id);
+    totals.wsDroppedTimeout += 1;
+    record503(req, req.wsDeadlineMs - req.arrivalMs);
+    return true;
+  }
+
+  function expireWebserverTimeouts(now) {
+    let dropped = 0;
+    for (let i = wsActive.length - 1; i >= 0; i -= 1) {
+      const req = wsActive[i];
+      if (now <= req.wsDeadlineMs) continue;
+      if (recordWebserverTimeout(req)) dropped += 1;
+    }
+    return dropped;
+  }
+
+  function admitWebserver(now, req) {
+    if (wsActive.length < wsMaxConcurrent) {
+      wsActive.push(req);
+      totals.enteredWebserver += 1;
+      return admitLimiter(now, req);
+    }
+    if (wsQueue.length < wsQueueCapacity) {
+      wsQueue.push({ ...req, queuedAtMs: now });
+      totals.enteredWebserver += 1;
+      return true;
+    }
+    totals.wsDroppedFull += 1;
+    record503(req, now - req.arrivalMs);
+    return false;
+  }
+
+  function promoteWebserverQueue(now) {
+    let dropped = 0;
+    while (wsQueue.length && wsActive.length < wsMaxConcurrent) {
+      const req = wsQueue.shift();
+      wsActive.push(req);
+      const entered = admitLimiter(now, req);
+      if (!entered) dropped += 1;
+    }
+    return dropped;
+  }
 
   // Admit to app. `now` is decisionTime — the moment the request leaves the
   // limiter and either starts processing or joins the app queue.
@@ -158,6 +246,9 @@ function runSimulation(cfg) {
     if (appInflight.length < maxConcurrent) {
       const serviceMs = sampleLatencyMs(latencyDist, latA, latB);
       appInflight.push({
+        id: req.id,
+        arrivalMs: req.arrivalMs,
+        wsDeadlineMs: req.wsDeadlineMs,
         endMs: now + serviceMs,
         appServiceMs: serviceMs,
         limiterWaitMs: req.limiterWaitMs,
@@ -171,34 +262,75 @@ function runSimulation(cfg) {
       totals.enteredApp += 1;
       return true;
     }
-    totals.rate503 += 1;
     totals.appDroppedFull += 1;
-    latencyByStatus.s503.push(req.limiterWaitMs);
+    record503(req, now - req.arrivalMs);
+    completeWebserver(req);
     return false;
+  }
+
+  function startLimiterDecision(now, req) {
+    const decisionLatencyMs = sampleLatencyMs(rlLatencyDist, rlLatA, rlLatB);
+    limiterInflight.push({
+      id: req.id,
+      decisionReadyMs: now + decisionLatencyMs,
+      arrivalMs: req.arrivalMs,
+      wsDeadlineMs: req.wsDeadlineMs,
+      limiterQueueWaitMs: req.limiterQueueWaitMs || 0
+    });
+    limiterLatencies.push(decisionLatencyMs);
+  }
+
+  function admitLimiter(now, req) {
+    totals.enteredLimiter += 1;
+    if (limiterInflight.length < rlMaxConcurrent) {
+      startLimiterDecision(now, req);
+      return true;
+    }
+    if (limiterQueue.length < rlQueueCapacity) {
+      limiterQueue.push({ ...req, queuedAtMs: now });
+      return true;
+    }
+    if (rlFailureMode === "bypass") {
+      totals.limiterBypassed += 1;
+      return admitApp(now, { ...req, limiterWaitMs: now - req.arrivalMs });
+    }
+    totals.limiterDroppedFull += 1;
+    record503(req, now - req.arrivalMs);
+    completeWebserver(req);
+    return false;
+  }
+
+  function promoteLimiterQueue(now) {
+    while (limiterQueue.length && limiterInflight.length < rlMaxConcurrent) {
+      const req = limiterQueue.shift();
+      startLimiterDecision(now, {
+        id: req.id,
+        arrivalMs: req.arrivalMs,
+        wsDeadlineMs: req.wsDeadlineMs,
+        limiterQueueWaitMs: now - req.queuedAtMs
+      });
+    }
   }
 
   function admitDependency(now, req) {
     if (depInflight.length < depMaxConcurrent) {
       const serviceMs = sampleLatencyMs(depLatencyDist, depLatA, depLatB);
       depInflight.push({
+        id: req.id,
+        arrivalMs: req.arrivalMs,
+        wsDeadlineMs: req.wsDeadlineMs,
         endMs: now + serviceMs,
         depServiceMs: serviceMs,
         limiterWaitMs: req.limiterWaitMs,
         appQueueWaitMs: req.appQueueWaitMs,
         appServiceMs: req.appServiceMs,
-        depQueueWaitMs: 0
       });
       totals.enteredDependency += 1;
       return true;
     }
-    if (depQueue.length < depQueueCapacity) {
-      depQueue.push({ ...req, queuedAtMs: now });
-      totals.enteredDependency += 1;
-      return true;
-    }
-    totals.rate503 += 1;
     totals.depDroppedFull += 1;
-    latencyByStatus.s503.push(req.limiterWaitMs + req.appQueueWaitMs + req.appServiceMs);
+    record503(req, now - req.arrivalMs);
+    completeWebserver(req);
     return false;
   }
 
@@ -214,46 +346,36 @@ function runSimulation(cfg) {
       if (depInflight[i].endMs > now) continue;
       const r = depInflight[i];
       depInflight.splice(i, 1);
+      if (r.endMs > r.wsDeadlineMs) {
+        if (recordWebserverTimeout(r)) step503 += 1;
+        continue;
+      }
+      completeWebserver(r);
       totals.served += 1;
-      const queueDelay = r.appQueueWaitMs + r.depQueueWaitMs;
+      const queueDelay = r.appQueueWaitMs;
       if (queueDelay > 0) totals.delayedServed += 1;
-      const totalLat = r.limiterWaitMs + queueDelay + r.appServiceMs + r.depServiceMs;
+      const totalLat = r.endMs - r.arrivalMs;
       latencyByStatus.s200.push(totalLat);
       sumLatency += totalLat;
       sumQueueDelay += queueDelay;
     }
 
-    // 2. Expire dep queue timeouts
-    for (let i = depQueue.length - 1; i >= 0; i -= 1) {
-      const r = depQueue[i];
-      if (now - r.queuedAtMs < depMaxQueueWaitMs) continue;
-      depQueue.splice(i, 1);
-      totals.rate503 += 1;
-      totals.depDroppedWait += 1;
-      step503 += 1;
-      latencyByStatus.s503.push(r.limiterWaitMs + r.appQueueWaitMs + r.appServiceMs + (now - r.queuedAtMs));
-    }
+    // 2. Expire webserver-owned requests whose end-to-end deadline has passed.
+    step503 += expireWebserverTimeouts(now);
 
-    // 3. Promote dep queue → dep inflight
-    while (depQueue.length && depInflight.length < depMaxConcurrent) {
-      const r = depQueue.shift();
-      const serviceMs = sampleLatencyMs(depLatencyDist, depLatA, depLatB);
-      depInflight.push({
-        endMs: now + serviceMs,
-        depServiceMs: serviceMs,
-        limiterWaitMs: r.limiterWaitMs,
-        appQueueWaitMs: r.appQueueWaitMs,
-        appServiceMs: r.appServiceMs,
-        depQueueWaitMs: now - r.queuedAtMs
-      });
-    }
-
-    // 4. Complete app inflight → try dependency admission
+    // 3. Complete app inflight → try dependency admission
     for (let i = appInflight.length - 1; i >= 0; i -= 1) {
       if (appInflight[i].endMs > now) continue;
       const r = appInflight[i];
       appInflight.splice(i, 1);
+      if (r.endMs > r.wsDeadlineMs) {
+        if (recordWebserverTimeout(r)) step503 += 1;
+        continue;
+      }
       const entered = admitDependency(now, {
+        id: r.id,
+        arrivalMs: r.arrivalMs,
+        wsDeadlineMs: r.wsDeadlineMs,
         limiterWaitMs: r.limiterWaitMs,
         appQueueWaitMs: r.appQueueWaitMs,
         appServiceMs: r.appServiceMs
@@ -261,22 +383,25 @@ function runSimulation(cfg) {
       if (!entered) step503 += 1;
     }
 
-    // 5. Expire app queue timeouts (measured from queue entry, not arrival)
+    // 4. Expire app queue timeouts (measured from queue entry, not arrival)
     for (let i = appQueue.length - 1; i >= 0; i -= 1) {
       const r = appQueue[i];
       if (now - r.queuedAtMs < maxQueueWaitMs) continue;
       appQueue.splice(i, 1);
-      totals.rate503 += 1;
       totals.appDroppedWait += 1;
       step503 += 1;
-      latencyByStatus.s503.push(r.limiterWaitMs + (now - r.queuedAtMs));
+      record503(r, now - r.arrivalMs);
+      completeWebserver(r);
     }
 
-    // 6. Promote app queue → app inflight
+    // 5. Promote app queue → app inflight
     while (appQueue.length && appInflight.length < maxConcurrent) {
       const r = appQueue.shift();
       const serviceMs = sampleLatencyMs(latencyDist, latA, latB);
       appInflight.push({
+        id: r.id,
+        arrivalMs: r.arrivalMs,
+        wsDeadlineMs: r.wsDeadlineMs,
         endMs: now + serviceMs,
         appServiceMs: serviceMs,
         limiterWaitMs: r.limiterWaitMs,
@@ -284,7 +409,44 @@ function runSimulation(cfg) {
       });
     }
 
-    // 7. Generate arrivals and enqueue limiter decisions
+    // 6. Expire limiter queue timeouts
+    for (let i = limiterQueue.length - 1; i >= 0; i -= 1) {
+      const req = limiterQueue[i];
+      if (now - req.queuedAtMs < rlMaxQueueWaitMs) continue;
+      limiterQueue.splice(i, 1);
+      if (rlFailureMode === "bypass") {
+        totals.limiterBypassed += 1;
+        const entered = admitApp(now, { ...req, limiterWaitMs: now - req.arrivalMs });
+        if (!entered) step503 += 1;
+      } else {
+        totals.limiterDroppedWait += 1;
+        step503 += 1;
+        record503(req, now - req.arrivalMs);
+        completeWebserver(req);
+      }
+    }
+
+    // 7. Promote limiter queue → limiter inflight
+    promoteLimiterQueue(now);
+
+    // 8. Expire and promote requests waiting at the webserver boundary.
+    for (let i = wsQueue.length - 1; i >= 0; i -= 1) {
+      const req = wsQueue[i];
+      if (now > req.wsDeadlineMs) {
+        wsQueue.splice(i, 1);
+        totals.wsDroppedTimeout += 1;
+        step503 += 1;
+        record503(req, req.wsDeadlineMs - req.arrivalMs);
+      } else if (now - req.queuedAtMs >= wsMaxQueueWaitMs) {
+        wsQueue.splice(i, 1);
+        totals.wsDroppedWait += 1;
+        step503 += 1;
+        record503(req, now - req.arrivalMs);
+      }
+    }
+    step503 += promoteWebserverQueue(now);
+
+    // 9. Generate arrivals and enqueue webserver-owned requests.
     const expectedRps = expectedTrafficRpsAt(step, steps, rps, burstiness);
     const expectedInStep = Math.max(0, (expectedRps * stepMs) / 1000);
     let arrivals;
@@ -296,40 +458,59 @@ function runSimulation(cfg) {
       trafficArrivalAccumulator -= arrivals;
     }
     for (let i = 0; i < arrivals; i += 1) {
-      const decisionLatencyMs = sampleLatencyMs(rlLatencyDist, rlLatA, rlLatB);
-      limiterPending.push({ decisionReadyMs: now + decisionLatencyMs, arrivalMs: now });
-      limiterLatencies.push(decisionLatencyMs);
+      const req = {
+        id: nextReqId,
+        arrivalMs: now,
+        wsDeadlineMs: now + wsRequestTimeoutMs
+      };
+      nextReqId += 1;
+      const entered = admitWebserver(now, req);
+      if (!entered) step503 += 1;
     }
     totals.arrived += arrivals;
 
-    // 8. Process limiter decisions in chronological order. Sorting by
+    // 10. Process limiter decisions in chronological order. Sorting by
     // decisionReadyMs is what makes the sliding window correct under
     // jittered decision latencies.
-    limiterPending.sort((a, b) => a.decisionReadyMs - b.decisionReadyMs);
+    limiterInflight.sort((a, b) => a.decisionReadyMs - b.decisionReadyMs);
     let readyCount = 0;
-    while (readyCount < limiterPending.length && limiterPending[readyCount].decisionReadyMs <= bucketEnd) {
+    while (readyCount < limiterInflight.length && limiterInflight[readyCount].decisionReadyMs <= bucketEnd) {
       readyCount += 1;
     }
-    const ready = limiterPending.splice(0, readyCount);
+    const ready = limiterInflight.splice(0, readyCount);
     for (const pending of ready) {
       const decisionTime = pending.decisionReadyMs;
+      if (decisionTime > pending.wsDeadlineMs) {
+        if (recordWebserverTimeout(pending)) step503 += 1;
+        continue;
+      }
       const blockedIdx = limiters.findIndex((lim) => !lim.canAllow(decisionTime));
       if (blockedIdx >= 0) {
         totals.rate429 += 1;
         step429 += 1;
         windowSeries[blockedIdx].blocked += 1;
         latencyByStatus.s429.push(decisionTime - pending.arrivalMs);
+        completeWebserver(pending);
         continue;
       }
       for (const lim of limiters) lim.commit(decisionTime);
       stepAccepted += 1;
-      const entered = admitApp(decisionTime, { limiterWaitMs: decisionTime - pending.arrivalMs });
+      const entered = admitApp(decisionTime, {
+        id: pending.id,
+        arrivalMs: pending.arrivalMs,
+        wsDeadlineMs: pending.wsDeadlineMs,
+        limiterWaitMs: decisionTime - pending.arrivalMs
+      });
       if (!entered) step503 += 1;
     }
+    promoteLimiterQueue(bucketEnd);
 
-    peaks.limiterPending = Math.max(peaks.limiterPending, limiterPending.length);
+    peaks.wsQueue = Math.max(peaks.wsQueue, wsQueue.length);
+    peaks.wsActive = Math.max(peaks.wsActive, wsActive.length);
+    peaks.limiterQueue = Math.max(peaks.limiterQueue, limiterQueue.length);
+    peaks.limiterInflight = Math.max(peaks.limiterInflight, limiterInflight.length);
+    peaks.limiterPending = Math.max(peaks.limiterPending, limiterInflight.length + limiterQueue.length);
     peaks.appQueue = Math.max(peaks.appQueue, appQueue.length);
-    peaks.depQueue = Math.max(peaks.depQueue, depQueue.length);
     peaks.appInflight = Math.max(peaks.appInflight, appInflight.length);
     peaks.depInflight = Math.max(peaks.depInflight, depInflight.length);
 
@@ -345,8 +526,12 @@ function runSimulation(cfg) {
       active: appInflight.length,
       queued: appQueue.length,
       depActive: depInflight.length,
-      depQueued: depQueue.length,
-      limiterPending: limiterPending.length,
+      depQueued: 0,
+      wsActive: wsActive.length,
+      wsQueued: wsQueue.length,
+      limiterActive: limiterInflight.length,
+      limiterQueued: limiterQueue.length,
+      limiterPending: limiterInflight.length + limiterQueue.length,
       expectedArrivalsPerSec: Math.round(expectedRps),
       arrivalsPerSec: Math.round(arrivals * perSec),
       acceptedPerSec: Math.round(stepAccepted * perSec),
@@ -365,8 +550,9 @@ function runSimulation(cfg) {
     totals: {
       ...totals,
       // Rolled-up aliases kept for back-compat; prefer per-stage fields above.
-      droppedFull: totals.appDroppedFull + totals.depDroppedFull,
-      droppedWait: totals.appDroppedWait + totals.depDroppedWait,
+      droppedFull: totals.wsDroppedFull + totals.limiterDroppedFull + totals.appDroppedFull + totals.depDroppedFull,
+      droppedWait: totals.wsDroppedWait + totals.limiterDroppedWait + totals.appDroppedWait + totals.depDroppedWait,
+      droppedTimeout: totals.wsDroppedTimeout,
       servedPct: pct(totals.served, totals.arrived),
       rate503Pct: pct(totals.rate503, totals.arrived),
       rate429Pct: pct(totals.rate429, totals.arrived)
@@ -387,9 +573,13 @@ function runSimulation(cfg) {
       peakPending: peaks.limiterPending
     },
     queues: {
+      peakWsQueue: peaks.wsQueue,
+      peakWsActive: peaks.wsActive,
       peakLimiterPending: peaks.limiterPending,
+      peakLimiterQueue: peaks.limiterQueue,
+      peakLimiterInflight: peaks.limiterInflight,
       peakAppQueue: peaks.appQueue,
-      peakDepQueue: peaks.depQueue,
+      peakDepQueue: 0,
       peakAppInflight: peaks.appInflight,
       peakDepInflight: peaks.depInflight
     },
