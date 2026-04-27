@@ -37,6 +37,37 @@ const STAGE_KEYS = {
 const round = (v) => Math.round(v * 100) / 100;
 const sum = (xs) => xs.reduce((a, b) => a + b, 0);
 const defined = (xs) => xs.filter((v) => v != null);
+const DEFAULT_UI_BASE_URL = process.env.RATELIMITER_SIMULATOR_UI_URL || "https://ratelimiter-simulator.amir-rassafi.workers.dev/";
+const UI_STATE_VERSION = 16;
+const UI_CONTROL_KEYS = [
+  "durationSec",
+  "stepMs",
+  "rps",
+  "burstiness",
+  "trafficNoise",
+  "wsMaxConcurrent",
+  "wsQueueCapacity",
+  "wsMaxQueueWaitMs",
+  "wsRequestTimeoutMs",
+  "maxConcurrent",
+  "queueCapacity",
+  "maxQueueWaitMs",
+  "limiterType",
+  "rlFailureMode",
+  "latencyDist",
+  "latA",
+  "latB",
+  "rlLatencyDist",
+  "rlLatA",
+  "rlLatB",
+  "rlMaxConcurrent",
+  "rlQueueCapacity",
+  "rlMaxQueueWaitMs",
+  "depMaxConcurrent",
+  "depLatencyDist",
+  "depLatA",
+  "depLatB"
+];
 
 function defaultSimulationConfig() {
   return {
@@ -94,6 +125,32 @@ function mergeConfig(base, overrides = {}) {
   const next = { ...base, ...overrides };
   if (Array.isArray(overrides.windows)) next.windows = overrides.windows.map((w) => ({ ...w }));
   return next;
+}
+
+function encodeBase64Url(value) {
+  return Buffer.from(value, "utf8").toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function makeUiState(config) {
+  const controls = {};
+  for (const key of UI_CONTROL_KEYS) {
+    if (config[key] !== undefined) controls[key] = config[key];
+  }
+  return {
+    version: UI_STATE_VERSION,
+    controls,
+    windows: Array.isArray(config.windows) ? config.windows.map((w) => ({ ...w })) : []
+  };
+}
+
+function makeUiUrl(config, baseUrl = DEFAULT_UI_BASE_URL) {
+  const state = encodeBase64Url(JSON.stringify(makeUiState(config)));
+  const url = new URL(baseUrl);
+  url.searchParams.set("state", state);
+  return url.toString();
 }
 
 function reviewRateLimitConfig(config) {
@@ -249,7 +306,7 @@ function normalizeComponentPath(input = {}) {
 function simulateScenario(input = {}) {
   const config = mergeConfig(defaultSimulationConfig(), input.config || input);
   const result = runSimulation(config);
-  return { config, summary: summarizeResult(result), warnings: reviewRateLimitConfig(config), result };
+  return { config, uiUrl: makeUiUrl(config, input.uiBaseUrl), summary: summarizeResult(result), warnings: reviewRateLimitConfig(config), result };
 }
 
 function compareScenarios(input = {}) {
@@ -278,6 +335,8 @@ function compareScenarios(input = {}) {
   return {
     base: base.summary,
     candidate: candidate.summary,
+    baseUiUrl: makeUiUrl(base.config, input.uiBaseUrl),
+    candidateUiUrl: makeUiUrl(candidate.config, input.uiBaseUrl),
     delta,
     warnings: [...new Set([...base.warnings, ...candidate.warnings])]
   };
@@ -288,6 +347,7 @@ function reviewComponentPath(input = {}) {
   const result = runSimulation(normalized.config);
   return {
     normalizedConfig: normalized.config,
+    uiUrl: makeUiUrl(normalized.config, input.uiBaseUrl),
     collapse: normalized.collapse,
     assumptions: normalized.assumptions,
     warnings: normalized.warnings,
@@ -301,6 +361,8 @@ module.exports = {
   defaultSimulationConfig,
   normalizeComponentPath,
   reviewRateLimitConfig,
+  makeUiState,
+  makeUiUrl,
   simulateScenario,
   compareScenarios,
   reviewComponentPath

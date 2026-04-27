@@ -47,6 +47,11 @@ function runServer(requests) {
   for (const needed of ["simulate_scenario", "compare_scenarios", "review_component_path", "default_simulation_config"]) {
     assert(names.includes(needed), `missing tool: ${needed}`);
   }
+  const reviewTool = list.result.tools.find((t) => t.name === "review_component_path");
+  assert(reviewTool.inputSchema.properties.uiBaseUrl, "review_component_path schema should expose configurable uiBaseUrl");
+  const componentProps = reviewTool.inputSchema.properties.components.items.properties;
+  assert(componentProps.requestTimeoutMs, "review_component_path schema should expose webserver requestTimeoutMs");
+  assert(componentProps.queueTimeoutMs, "review_component_path schema should expose webserver queueTimeoutMs");
 
   const call = byId.get(3);
   assert(call.result.content?.[0]?.type === "text", "tool result must include text content");

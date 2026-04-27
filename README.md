@@ -1,6 +1,6 @@
 # Rate Limiter Simulator
 
-Browser simulator for traffic, sliding-window rate limits, queue pressure, backend latency, `429`, and `503` outcomes.
+Browser simulator for traffic, a high-capacity webserver front door, sliding-window rate limits, queue pressure, backend latency, `429`, and `503` outcomes.
 
 Demo: https://ratelimiter-simulator.amir-rassafi.workers.dev/
 
@@ -8,13 +8,16 @@ Demo: https://ratelimiter-simulator.amir-rassafi.workers.dev/
 
 ```mermaid
 flowchart LR
-  A[Traffic arrivals] --> B[Rate limit rules]
-  B -->|allowed| C[Backend capacity]
+  A[Traffic arrivals] --> W[Webserver capacity and deadline]
+  W --> B[Rate limit rules]
+  B -->|allowed| C[App capacity]
   B -->|rate limited| E[429]
-  C -->|available| D[Served]
-  C -->|full| Q[Queue]
+  C -->|available| D[Dependency capacity]
+  C -->|full| Q[App pending]
   Q -->|slot opens| D
-  Q -->|timeout or full| F[503]
+  W -->|deadline, pending timeout, or full| F[503]
+  D -->|served| S[Served]
+  D -->|capacity failure| F
 ```
 
 ## MCP
@@ -26,20 +29,23 @@ This repo now includes a small MCP server so an agent can reason about behavior 
 The MCP is meant for design review and coding support:
 - run the simulator with explicit parameters
 - compare two configurations
-- normalize a component path like `WAF -> API gateway -> app -> DB` into the simulator's assumptions
+- normalize a component path like `webserver -> WAF -> API gateway -> app -> DB` into the simulator's assumptions
+- return a shareable UI URL for each normalized or explicit scenario
 - surface warnings when the limiter is looser than downstream capacity or timeouts look unrealistic
 
 ### How component alignment works
 
-The current simulator is still a compact model, so the MCP collapses infrastructure components into three groups:
-- control path: `client`, `internet`, `edge`, `waf`, `load_balancer`, `api_gateway`
+The current simulator is still a compact model, so the MCP collapses infrastructure components into four groups:
+- webserver front door: `webserver`, `web_server`, `nginx`
+- control path / limiter decision path: `client`, `internet`, `edge`, `waf`, `load_balancer`, `api_gateway`
 - app stage: `app`, `app_service`, `service`
 - dependency stage: `db`, `cache`, `queue`, `worker`, `third_party_api`, `dependency`
 
 That means the agent does not simulate every box literally. It makes explicit assumptions:
-- control-path components add fast decision latency and may attach limiter windows
+- webserver components own active client requests, pending capacity, pending timeout, and end-to-end request timeout
+- control-path components add rate-limiter decision latency, limiter capacity, limiter pending capacity, limiter timeout, and may attach limiter windows
 - the app stage owns active capacity, pending capacity, and app timeout
-- dependency components are folded into downstream latency, capacity, pending capacity, and dependency timeout
+- dependency components are folded into downstream latency and active capacity
 
 The MCP returns those assumptions so the agent can review them instead of hiding them.
 
@@ -64,8 +70,17 @@ Example input:
 
 ```json
 {
+  "uiBaseUrl": "http://localhost:8080/",
   "traffic": { "rps": 120, "burstiness": 0.2 },
   "components": [
+    {
+      "kind": "nginx",
+      "name": "Webserver",
+      "maxConcurrent": 1000,
+      "queueCapacity": 5000,
+      "queueTimeoutMs": 1000,
+      "requestTimeoutMs": 5000
+    },
     {
       "kind": "waf",
       "name": "WAF",
@@ -76,15 +91,16 @@ Example input:
         "windows": [{ "windowMs": 1000, "limit": 40 }]
       }
     },
-    { "kind": "api_gateway", "name": "Gateway", "latencyMs": 5, "jitterMs": 2 },
+    { "kind": "api_gateway", "name": "Gateway", "latencyMs": 5, "jitterMs": 2, "maxConcurrent": 500, "queueCapacity": 1000, "timeoutMs": 250 },
     { "kind": "app", "name": "App", "latencyMs": 80, "jitterMs": 10, "maxConcurrent": 20, "queueCapacity": 200, "timeoutMs": 1000 },
-    { "kind": "db", "name": "DB", "latencyMs": 240, "jitterMs": 30, "maxConcurrent": 4, "queueCapacity": 40, "timeoutMs": 300 }
+    { "kind": "db", "name": "DB", "latencyMs": 240, "jitterMs": 30, "maxConcurrent": 4 }
   ]
 }
 ```
 
 The result includes:
 - the normalized simulator config
+- a `uiUrl` that opens the browser simulator with that config loaded and run
 - the assumptions used to collapse components into the model
 - warnings
 - summary metrics
@@ -95,6 +111,14 @@ The result includes:
 ```bash
 npm run mcp
 ```
+
+Generated UI links default to the public demo URL. To point MCP results at a local or deployed copy of the UI, set:
+
+```bash
+RATELIMITER_SIMULATOR_UI_URL=http://localhost:8080/ npm run mcp
+```
+
+You can also pass `uiBaseUrl` to `simulate_scenario`, `compare_scenarios`, or `review_component_path` for one request.
 
 A local MCP client can then connect to the server over stdio using:
 

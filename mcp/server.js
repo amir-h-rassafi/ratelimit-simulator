@@ -30,7 +30,8 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        config: { type: "object", description: "Flat simulation config. Omit to use defaults.", additionalProperties: true }
+        config: { type: "object", description: "Flat simulation config. Omit to use defaults.", additionalProperties: true },
+        uiBaseUrl: { type: "string", description: "Optional browser simulator base URL for generated share links. Defaults to RATELIMITER_SIMULATOR_UI_URL or the public demo URL." }
       },
       additionalProperties: false
     }
@@ -42,7 +43,8 @@ const TOOLS = [
       type: "object",
       properties: {
         base: { type: "object", additionalProperties: true },
-        candidate: { type: "object", additionalProperties: true }
+        candidate: { type: "object", additionalProperties: true },
+        uiBaseUrl: { type: "string", description: "Optional browser simulator base URL for generated share links. Defaults to RATELIMITER_SIMULATOR_UI_URL or the public demo URL." }
       },
       required: ["base", "candidate"],
       additionalProperties: false
@@ -50,12 +52,13 @@ const TOOLS = [
   },
   {
     name: "review_component_path",
-    description: "Normalize a component-oriented path like WAF -> API gateway -> app -> DB into simulator assumptions, then run the simulator and explain the assumptions.",
+    description: "Normalize a component-oriented path like webserver -> WAF -> API gateway -> app -> DB into simulator assumptions, then run the simulator and explain the assumptions.",
     inputSchema: {
       type: "object",
       properties: {
         traffic: { type: "object", additionalProperties: true },
         defaults: { type: "object", additionalProperties: true },
+        uiBaseUrl: { type: "string", description: "Optional browser simulator base URL for generated share links. Defaults to RATELIMITER_SIMULATOR_UI_URL or the public demo URL." },
         components: {
           type: "array",
           items: {
@@ -68,6 +71,8 @@ const TOOLS = [
               latencyDist: { type: "string" },
               maxConcurrent: { type: "number" },
               queueCapacity: { type: "number" },
+              queueTimeoutMs: { type: "number" },
+              requestTimeoutMs: { type: "number" },
               timeoutMs: { type: "number" },
               rateLimiter: { type: "object", additionalProperties: true }
             },

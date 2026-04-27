@@ -143,6 +143,23 @@ function loadStateFromCookie() {
   }
 }
 
+function decodeBase64Url(value) {
+  const normalized = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  return decodeURIComponent(escape(window.atob(padded)));
+}
+
+function loadStateFromUrl() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const rawState = params.get("state");
+    if (!rawState) return null;
+    return JSON.parse(decodeBase64Url(rawState));
+  } catch {
+    return null;
+  }
+}
+
 function getUiState() {
   const controls = {};
   for (const id of CONTROL_IDS) {
@@ -724,7 +741,7 @@ function boot() {
   }
 
   addWindowRow(1000, 30);
-  applyStateToUi(loadStateFromCookie());
+  applyStateToUi(loadStateFromUrl() || loadStateFromCookie());
   runAndRender();
   updateRunButton();
 }
